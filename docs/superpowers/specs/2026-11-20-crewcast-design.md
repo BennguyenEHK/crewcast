@@ -261,6 +261,28 @@ Known recipes from the owner's setup, all to be verified by the builder:
   - This makes the agents a two-way team, not fire-and-forget subagents.
 - Workers never run with permission checks off (§3). Each CLI's auto flags are scoped to the repo.
 
+**Shared environment, so the team works as one** (raised by the owner, 2026-11-20):
+- **One codebase.**
+  - Read-only workers (review, research) run in the main folder.
+  - Each **writing** worker gets its own git worktree (`<repo>-wt/<engine>-<n>`, its own branch, same history).
+  - No two writers ever share a folder.
+- **File ownership.** The full decide gives each writer a list of the files it owns. Before merging, the lead checks that the worker's diff stays inside that list.
+- **Merge.**
+  - Only the lead merges, after reviewing the diff. The lead resolves any conflicts.
+  - After merging: remove the worktree link first, then the folder, then the branch.
+- **Same project rules.**
+  - One shared `AGENTS.md` holds the project rules. `CLAUDE.md` imports it (`@AGENTS.md`), and Gemini is set to read it as a context file. Codex reads it natively.
+  - Copilot and Kiro: the builder verifies whether they read `AGENTS.md`.
+  - `setup` offers to create this; it never overwrites an existing file without a yes.
+- **Task card.** Each worker gets a short card in its prompt and in the mailbox: goal, owned files, done criteria, the mailbox run id.
+- **Tools.** Each worker gets only the MCP servers the decision picked, passed through that CLI's per-run config. Logins are per CLI (done once in `setup`).
+- **Dependencies.**
+  - A writer that must build runs a normal install inside its worktree (the npm cache keeps it fast).
+  - **Never link a worktree's `node_modules` to the main one.** Deleting through such a link emptied the real folder on the owner's machine.
+- **Secrets.**
+  - Workers inherit the lead's environment and can read repo `.env` files.
+  - The mailbox and logs redact key-like strings, and the task card tells workers never to print secrets.
+
 ### 7.8 Sharing skills with other CLIs
 
 - Most of these CLIs read the same `SKILL.md` folder format, each from its own folder. Sources disagree on the exact paths, so the builder must confirm each in the vendor's official docs:
