@@ -203,7 +203,6 @@ export function parseFrontmatter(text: string): { name?: string; description?: s
 export interface SkillDir { dir: string; prefix?: string }           // prefix = plugin name for plugin skills
 export function loadSkills(dirs: SkillDir[]): Promise<Skill[]>;     // each dir holds <skill>/SKILL.md; missing dirs ignored; dedupe by name, first wins
 export function defaultSkillDirs(home: string, cwd: string): Promise<SkillDir[]>;
-export function loadSkillsCached(dirs: SkillDir[], indexFile: string): Promise<Skill[]>; // index = <crewcastHome>/skills-index.json
 export function shortlist(task: string, skills: Skill[], k?: number): Skill[]; // default k = 20
 ```
 
@@ -216,10 +215,7 @@ Details (measured on the owner's machine: 55 user skills, **41 of them links**; 
   These two JSON files are internal to Claude Code: read them defensively. If either is missing or unreadable, plugin skills are empty, and `crewcast skills` says so. **Never walk `plugins/cache`**: it holds old versions and disabled plugins (177 skills found there vs the real 136).
 - **Follow links** for skill folders. Read-only, so it is safe. Use `stat`, not `lstat`, on each `<skill>` entry.
 - Read only the frontmatter: stop at the closing `---`.
-- `loadSkillsCached`:
-  - The index stores `{ skills, stamps: Record<path, mtimeMs> }`. Stamps cover each skill dir and each `SKILL.md`.
-  - On call, `stat` every stamped path. If all are unchanged and no dir list changed, return the cached skills. Otherwise rebuild and rewrite the index.
-  - A corrupt index is rebuilt.
+- **Read live on every decide; no index (owner's decision).** Comment in code: `shortcut: re-reads all skill frontmatter per decide (~0.2–0.5 s measured), add an mtime-stamped index if Task 8 p95 misses 1.5 s.` Task 8 records the skill-scan time separately.
 - CLI: `crewcast skills` lists `name — source dir`, plus totals per source.
 - `parseFrontmatter`:
   - handles `\r\n`;
@@ -245,7 +241,7 @@ test('missing dir is ignored', ...)
 test('plugin skill gets plugin: prefix', ...)        // SkillDir {dir, prefix:'superpowers'} + brainstorming/SKILL.md → 'superpowers:brainstorming'
 test('defaultSkillDirs: only enabled plugins at their installPath; disabled plugin excluded; missing json → no plugin dirs', ...) // fixture home with installed_plugins.json + settings.json
 test('linked skill folder is followed', ...)        // fs.symlink(target, link, 'junction') in a temp dir; skip the test if creating the link throws EPERM
-test('loadSkillsCached reuses the index when nothing changed, rebuilds after a SKILL.md edit, rebuilds a corrupt index', ...)
+test('same skill name in two dirs counts once; first dir wins', ...)
 test('shortlist ranks by overlap and drops zero', ...) // task 'review security of auth code' → 'security-review' first; unrelated skill absent
 ```
 
