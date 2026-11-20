@@ -102,3 +102,33 @@ test('shortlist ranks by overlap and drops zero', async () => {
   assert.ok(!top.some(s => s.name === 'superpowers:brainstorming'));
   assert.ok(!top.some(s => s.name === 'folded-skill'));
 });
+
+test('on-disk CRLF and BOM SKILL.md files load through load()', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'cc-crlf-'));
+  try {
+    await mkdir(join(tmp, 'crlf-skill'));
+    await writeFile(join(tmp, 'crlf-skill', 'SKILL.md'), '---\r\nname: crlf-skill\r\ndescription: Windows line endings.\r\n---\r\n\r\nbody\r\n');
+    await mkdir(join(tmp, 'bom-skill'));
+    await writeFile(join(tmp, 'bom-skill', 'SKILL.md'), '\uFEFF--- \nname: bom-skill\ndescription: BOM and trailing space.\n---\n');
+    const skills = await catalog.load([{ dir: tmp }]);
+    assert.deepEqual(skills.map(s => [s.name, s.description]), [
+      ['bom-skill', 'BOM and trailing space.'],
+      ['crlf-skill', 'Windows line endings.'],
+    ]);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('an unreadable entry is skipped and the rest still load', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'cc-bad-'));
+  try {
+    await mkdir(join(tmp, 'broken', 'SKILL.md'), { recursive: true });
+    await mkdir(join(tmp, 'good'));
+    await writeFile(join(tmp, 'good', 'SKILL.md'), '---\nname: good\ndescription: Still loads.\n---\n');
+    const skills = await catalog.load([{ dir: tmp }]);
+    assert.deepEqual(skills.map(s => s.name), ['good']);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

@@ -73,10 +73,6 @@ export class SkillCatalog {
     return new Set(text.toLowerCase().match(/[a-z]{3,}/g) ?? []);
   }
 
-  private static absent(err: unknown): boolean {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT';
-  }
-
   private static async readJson(file: string): Promise<any> {
     try {
       return JSON.parse(await readFile(file, 'utf8'));
@@ -89,9 +85,8 @@ export class SkillCatalog {
     let entries: string[];
     try {
       entries = await readdir(dir);
-    } catch (err) {
-      if (SkillCatalog.absent(err)) return [];
-      throw err;
+    } catch {
+      return []; // missing, a file, or unreadable: skip the dir, never abort the scan
     }
     const skills = await Promise.all(entries.map(entry => SkillCatalog.loadOne(join(dir, entry), prefix)));
     return skills.filter((s): s is Skill => s !== null);
@@ -106,22 +101,24 @@ export class SkillCatalog {
       if (!fm) return null;
       const name = fm.name ?? basename(folder);
       return { name: prefix ? `${prefix}:${name}` : name, description: fm.description ?? '', path: file };
-    } catch (err) {
-      if (SkillCatalog.absent(err)) return null;
-      throw err;
+    } catch {
+      return null; // broken link, EACCES, a directory named SKILL.md, etc.: skip this entry only
     }
   }
 
   // Reads lines only up to the closing --- of the frontmatter, not the whole file.
+  // Strips a UTF-8 BOM and trims the --- delimiter lines so Windows-authored files parse.
   private static async head(file: string): Promise<string> {
     const fh = await open(file, 'r');
     const input = fh.createReadStream();
     const rl = createInterface({ input, crlfDelay: Infinity });
     const lines: string[] = [];
     try {
-      for await (const line of rl) {
-        lines.push(line);
-        if (lines.length === 1 ? line !== '---' : line === '---') break;
+      for await (const raw of rl) {
+        const line = lines.length === 0 ? raw.replace(/^\uFEFF/, '') : raw;
+        const delim = line.trim() === '---';
+        lines.push(delim ? '---' : line);
+        if (lines.length === 1 ? !delim : delim) break;
       }
     } finally {
       input.destroy();
