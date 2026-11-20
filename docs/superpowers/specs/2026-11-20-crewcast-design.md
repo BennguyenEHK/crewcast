@@ -181,7 +181,7 @@ The decision model does not choose these in v1 (see the research in §5).
 
 | Backend | When | Notes |
 |---|---|---|
-| **Nimble v2 via Ollama** (`ollama pull nimble`, Ollama `/v1/systemone`) | **Default** when a GPU with roughly ≥ 8 GB is found | Apache-2.0, 9B, up to 255 options per question, 8,192-token input, rejects longer input instead of cutting it off. 90.1% vs Jev's 93.2% on its makers' 324-example test. **Builder must verify** the quantized download size, the VRAM use and the `/v1/systemone` request format on the owner's laptop before choosing it. |
+| **Nimble via Ollama** (`ollama pull nimble`, Ollama ≥ 0.35 `/v1/systemone`; the owner has 0.40.16) | **Default** when a GPU with roughly ≥ 8 GB is found | Apache-2.0, 9B, **~9.5 GB download** (bigger than 8 GB VRAM, so expect a partial CPU split; phase 0 measures the latency). Through Ollama: `choice` takes 2–26 options, up to 64 questions per request, body ≤ 64 KiB, 8,192-token input (longer input is rejected, not cut off). 90.1% vs Jev's 93.2% on its makers' 324-example test. Other Ollama decision models (`tev1`, `laya`) use the same endpoint, so trying them is a name change. |
 | SCX Router v0.1 (0.6B, Apache-2.0, `gliclass`) | Low-VRAM or CPU-only machines | Python, so a sidecar process. Predicts difficulty and reasoning-or-not; accepts custom labels. |
 | Embedding similarity only | Last fallback; skill matching only | All yes/no signals become `uncertain`. |
 
@@ -222,7 +222,7 @@ Field names are a sketch; the builder may refine them, but must keep: one value 
 Built at setup and refreshed by `doctor`. Stored in `~/.crewcast/`.
 - **Skills:** the name and description from each installed `SKILL.md` frontmatter (`~/.claude/skills`, project `.claude/skills`, plugin skill folders).
 - **MCP servers and plugins:** from each CLI's config.
-- **Shortlist before asking the model.** A user can have 300+ skills; the owner already does. A cheap keyword or BM25 prefilter cuts the list to ≤ 40 before the choice question, within Nimble's 255-option limit and its token budget. Builder's choice of method.
+- **Shortlist before asking the model.** A user can have 300+ skills; the owner already does. A cheap keyword prefilter cuts the list to ≤ 20. Each shortlisted skill then gets its own yes/no question, because a `choice` allows only 2–26 options and skills are a pick-several, not a pick-one. Builder's choice of prefilter method.
 
 ### 7.6 Engine catalog
 
