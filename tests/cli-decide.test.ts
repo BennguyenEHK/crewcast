@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -20,6 +20,7 @@ async function withSandbox(fn: (sandbox: { env: NodeJS.ProcessEnv; cwd: string }
   try {
     const home = join(root, 'home');
     const cwd = join(root, 'proj');
+    await mkdir(cwd);
     await fn({ env: { USERPROFILE: home, CREWCAST_HOME: join(root, 'crewcast') }, cwd });
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -84,6 +85,16 @@ test('timeout → exit 2 and one line naming the base URL', async () => {
     assert.equal(code, 2);
     assert.equal(lines.length, 1);
     assert.match(lines[0], /http:\/\/127\.0\.0\.1:9999/);
+  });
+});
+
+test('bad_response → exit 2 and one error line', async () => {
+  await withSandbox(async ({ env, cwd }) => {
+    const ask = async () => { throw new BackendError('bad_response', 'response has no answers'); };
+    const lines: string[] = [];
+    const code = await new Cli(l => lines.push(l), { ask, env, cwd }).run(['decide', 'x']);
+    assert.equal(code, 2);
+    assert.deepEqual(lines, ['error: response has no answers']);
   });
 });
 

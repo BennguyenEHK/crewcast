@@ -93,7 +93,7 @@ export class Cli {
       if (err.code === 'ollama_unreachable') this.out(`Ollama not reachable at ${baseUrl} — start Ollama`);
       else if (err.code === 'model_missing') this.out(`model '${model}' not found — run: ollama pull ${model}`);
       else if (err.code === 'timeout') this.out(`Ollama at ${baseUrl} did not answer in time`);
-      else throw err;
+      else this.out(`error: ${err.message}`);
       return 2;
     }
 

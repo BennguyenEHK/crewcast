@@ -8,16 +8,16 @@ export class GitInspector {
   async state(cwd: string): Promise<GitState | null> {
     try {
       if (await this.git(cwd, ['rev-parse', '--is-inside-work-tree']) !== 'true') return null;
+      const branch = (await this.git(cwd, ['branch', '--show-current'])) || null;
+      return {
+        isRepo: true,
+        branch,
+        defaultBranch: await this.defaultBranch(cwd),
+        dirty: (await this.git(cwd, ['status', '--porcelain'])) !== '',
+      };
     } catch {
-      return null; // git missing or cwd is not a repo
+      return null; // git missing, not a repo, or git refused (old git, dubious ownership)
     }
-    const branch = (await this.git(cwd, ['branch', '--show-current'])) || null;
-    return {
-      isRepo: true,
-      branch,
-      defaultBranch: await this.defaultBranch(cwd),
-      dirty: (await this.git(cwd, ['status', '--porcelain'])) !== '',
-    };
   }
 
   private async defaultBranch(cwd: string): Promise<string | null> {
