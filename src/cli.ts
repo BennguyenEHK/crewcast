@@ -1,18 +1,21 @@
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { BackendError, SystemOneClient, type SystemOneRequest, type SystemOneResponse } from './backend/systemone.js';
 import { SkillCatalog, type Skill } from './catalog/skills.js';
 import { Config } from './paths.js';
 import { Decider } from './decide/decide.js';
+import type { DecisionRecord } from './decide/record.js';
 import { GitInspector } from './git.js';
+import { ShadowLog, type Actual } from './shadow.js';
+import { Agreement } from './agreement.js';
 
 const USAGE = [
   'usage: crewcast <command>',
   '  decide [--model <name>] [--json] <task...>',
-  '  label <id> <actual>',
+  '  label <id> --mode solo|team --skills a,b[,c]',
   '  stats',
   '  eval [draft]',
   '  skills',
@@ -33,6 +36,8 @@ export class Cli {
     }
     if (argv[0] === 'skills') return this.listSkills();
     if (argv[0] === 'decide') return this.decide(argv.slice(1));
+    if (argv[0] === 'label') return this.label(argv.slice(1));
+    if (argv[0] === 'stats') return this.stats();
     USAGE.forEach(line => this.out(line));
     return 1;
   }
@@ -97,6 +102,7 @@ export class Cli {
       return 2;
     }
 
+    if (rec.shadow) await new ShadowLog(this.crewcastHome()).append(rec);
     if (parsed.values.json) {
       this.out(JSON.stringify(rec));
       return 0;
@@ -105,6 +111,60 @@ export class Cli {
     this.out(`skills: ${rec.agents.flatMap(a => a.skills).join(', ') || 'none'}`);
     this.out(`branch: ${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`);
     this.out(`ms: ${rec.ms}`);
+    return 0;
+  }
+
+  private crewcastHome(): string {
+    return new Config(this.deps.env ?? process.env).home;
+  }
+
+  private async label(args: string[]): Promise<number> {
+    let parsed;
+    try {
+      parsed = parseArgs({
+        args,
+        allowPositionals: true,
+        options: { mode: { type: 'string' }, skills: { type: 'string' } },
+      });
+    } catch {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const [id, ...rest] = parsed.positionals;
+    const { mode, skills } = parsed.values;
+    if (!id || rest.length || (mode !== 'solo' && mode !== 'team') || skills === undefined) {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const actual: Actual = { mode, skills: skills.split(',').map(s => s.trim()).filter(Boolean) };
+    await new ShadowLog(this.crewcastHome()).addLabel(id, actual);
+    return 0;
+  }
+
+  private async stats(): Promise<number> {
+    const home = this.crewcastHome();
+    const shadow = await ShadowLog.readJsonl<DecisionRecord>(join(home, 'shadow.jsonl'));
+    const labels = await ShadowLog.readJsonl<{ id: string; actual: Actual }>(join(home, 'labels.jsonl'));
+    // Later labels overwrite earlier ones in the Map, so the last label for an id wins.
+    const actualById = new Map(labels.rows.map(l => [l.id, l.actual]));
+    const pairs: { rec: DecisionRecord; actual: Actual }[] = [];
+    let unlabelled = 0;
+    for (const rec of shadow.rows) {
+      const actual = actualById.get(rec.id);
+      if (actual) pairs.push({ rec, actual });
+      else unlabelled++;
+    }
+    const r = new Agreement().report(pairs, shadow.skipped + labels.skipped);
+    const uncertain = Object.entries(r.uncertain).map(([name, count]) => `${name} ${count}`).join(', ') || 'none';
+    this.out(`labelled: ${r.n}`);
+    this.out(`mode agreement: ${r.mode.toFixed(2)}`);
+    this.out(`skills agreement: ${r.skills.toFixed(2)}`);
+    this.out(`uncertain: ${uncertain}`);
+    this.out(`p50 ms: ${r.p50ms}`);
+    this.out(`p95 ms: ${r.p95ms}`);
+    this.out(`skipped lines: ${r.skipped}`);
+    this.out(`unlabelled: ${unlabelled}`);
+    this.out(r.pass ? 'PASS' : 'FAIL');
     return 0;
   }
 }
