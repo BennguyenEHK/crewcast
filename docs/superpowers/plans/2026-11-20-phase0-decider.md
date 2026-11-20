@@ -86,7 +86,7 @@ tests/fixtures/            synthetic skills, transcripts, eval tasks
 
 **Interfaces:**
 - Produces:
-  - `main(argv: string[], out: (line: string) => void): Promise<number>` (exit code) in `src/cli.ts`
+  - `main(argv: string[], out: (line: string) => void, deps?: Partial<{ ask; env; cwd }>): Promise<number>` (exit code) in `src/cli.ts`. Task 1 declares `deps` but ignores it; Task 5 fills it in.
   - `crewcastHome(env?: NodeJS.ProcessEnv): string`
   - `ollamaBaseUrl(env?: NodeJS.ProcessEnv): string` in `src/paths.ts`
 
