@@ -10,14 +10,16 @@ import { Decider } from './decide/decide.js';
 import type { DecisionRecord } from './decide/record.js';
 import { GitInspector } from './git.js';
 import { ShadowLog, type Actual } from './shadow.js';
-import { Agreement } from './agreement.js';
+import { Agreement, type Report } from './agreement.js';
+import { Evaluator } from './eval.js';
 
 const USAGE = [
   'usage: crewcast <command>',
   '  decide [--model <name>] [--json] <task...>',
   '  label <id> --mode solo|team --skills a,b[,c]',
   '  stats',
-  '  eval [draft]',
+  '  eval draft [--projects <dir>] [--out <file>] [--limit N]',
+  '  eval [--model <name>] [file]',
   '  skills',
   '  --version',
 ];
@@ -38,6 +40,7 @@ export class Cli {
     if (argv[0] === 'decide') return this.decide(argv.slice(1));
     if (argv[0] === 'label') return this.label(argv.slice(1));
     if (argv[0] === 'stats') return this.stats();
+    if (argv[0] === 'eval') return argv[1] === 'draft' ? this.evalDraft(argv.slice(2)) : this.evalRun(argv.slice(1));
     USAGE.forEach(line => this.out(line));
     return 1;
   }
@@ -95,10 +98,7 @@ export class Cli {
       rec = await new Decider({ ask, skills, git, model }).decide(task);
     } catch (err) {
       if (!(err instanceof BackendError)) throw err;
-      if (err.code === 'ollama_unreachable') this.out(`Ollama not reachable at ${baseUrl} — start Ollama`);
-      else if (err.code === 'model_missing') this.out(`model '${model}' not found — run: ollama pull ${model}`);
-      else if (err.code === 'timeout') this.out(`Ollama at ${baseUrl} did not answer in time`);
-      else this.out(`error: ${err.message}`);
+      this.backendLine(err, baseUrl, model);
       return 2;
     }
 
@@ -116,6 +116,95 @@ export class Cli {
 
   private crewcastHome(): string {
     return new Config(this.deps.env ?? process.env).home;
+  }
+
+  private backendLine(err: BackendError, baseUrl: string, model: string): void {
+    if (err.code === 'ollama_unreachable') this.out(`Ollama not reachable at ${baseUrl} — start Ollama`);
+    else if (err.code === 'model_missing') this.out(`model '${model}' not found — run: ollama pull ${model}`);
+    else if (err.code === 'timeout') this.out(`Ollama at ${baseUrl} did not answer in time`);
+    else this.out(`error: ${err.message}`);
+  }
+
+  private async evalDraft(args: string[]): Promise<number> {
+    let parsed;
+    try {
+      parsed = parseArgs({
+        args,
+        allowPositionals: true,
+        options: { projects: { type: 'string' }, out: { type: 'string' }, limit: { type: 'string', default: '80' } },
+      });
+    } catch {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const limit = Number(parsed.values.limit);
+    if (parsed.positionals.length || !Number.isInteger(limit) || limit < 1) {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const { home, cwd } = this.paths();
+    const projects = parsed.values.projects ?? join(home, '.claude', 'projects');
+    const out = parsed.values.out ?? join(this.crewcastHome(), 'eval', 'tasks.jsonl');
+    try {
+      const { written } = await new Evaluator({ cwd }).draft(projects, out, limit);
+      this.out(`Drafted ${written} tasks → ${out}. Open it and correct \`actual\` (mode, skills) for each line; delete lines that are not real tasks.`);
+      return 0;
+    } catch (err) {
+      this.out(`error: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  private async evalRun(args: string[]): Promise<number> {
+    let parsed;
+    try {
+      parsed = parseArgs({
+        args,
+        allowPositionals: true,
+        options: { model: { type: 'string', default: 'nimble' } },
+      });
+    } catch {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    if (parsed.positionals.length > 1) {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const { home, cwd } = this.paths();
+    const file = parsed.positionals[0] ?? join(this.crewcastHome(), 'eval', 'tasks.jsonl');
+    const model = parsed.values.model;
+    const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+    const client = new SystemOneClient({ baseUrl });
+    const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
+    const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+
+    let report: Report;
+    try {
+      report = await new Evaluator({ cwd }).run(file, { ask, skills, model });
+    } catch (err) {
+      if (err instanceof BackendError) {
+        this.backendLine(err, baseUrl, model);
+        return 2;
+      }
+      this.out(`error: ${(err as Error).message}`);
+      return 1;
+    }
+    this.printReport(report);
+    return report.pass ? 0 : 3;
+  }
+
+  private printReport(r: Report, unlabelled?: number): void {
+    const uncertain = Object.entries(r.uncertain).map(([name, count]) => `${name} ${count}`).join(', ') || 'none';
+    this.out(`labelled: ${r.n}`);
+    this.out(`mode agreement: ${r.mode.toFixed(2)}`);
+    this.out(`skills agreement: ${r.skills.toFixed(2)}`);
+    this.out(`uncertain: ${uncertain}`);
+    this.out(`p50 ms: ${r.p50ms}`);
+    this.out(`p95 ms: ${r.p95ms}`);
+    this.out(`skipped lines: ${r.skipped}`);
+    if (unlabelled !== undefined) this.out(`unlabelled: ${unlabelled}`);
+    this.out(r.pass ? 'PASS' : 'FAIL');
   }
 
   private async label(args: string[]): Promise<number> {
@@ -154,17 +243,7 @@ export class Cli {
       if (actual) pairs.push({ rec, actual });
       else unlabelled++;
     }
-    const r = new Agreement().report(pairs, shadow.skipped + labels.skipped);
-    const uncertain = Object.entries(r.uncertain).map(([name, count]) => `${name} ${count}`).join(', ') || 'none';
-    this.out(`labelled: ${r.n}`);
-    this.out(`mode agreement: ${r.mode.toFixed(2)}`);
-    this.out(`skills agreement: ${r.skills.toFixed(2)}`);
-    this.out(`uncertain: ${uncertain}`);
-    this.out(`p50 ms: ${r.p50ms}`);
-    this.out(`p95 ms: ${r.p95ms}`);
-    this.out(`skipped lines: ${r.skipped}`);
-    this.out(`unlabelled: ${unlabelled}`);
-    this.out(r.pass ? 'PASS' : 'FAIL');
+    this.printReport(new Agreement().report(pairs, shadow.skipped + labels.skipped), unlabelled);
     return 0;
   }
 }

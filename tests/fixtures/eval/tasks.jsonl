@@ -1,0 +1,3 @@
+{"id":"fix-login","task":"Fix the login redirect bug","actual":{"mode":"solo","skills":["systematic-debugging"]}}
+{"id":"parallel-review","task":"Review the three services in parallel with separate agents","actual":{"mode":"team","skills":["code-review"]}}
+{"id":"read-page","task":"Summarize this web page about the API limits","actual":{"mode":"solo","skills":[]}}
