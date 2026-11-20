@@ -18,7 +18,7 @@ const USAGE = [
   '  decide [--model <name>] [--json] <task...>',
   '  label <id> --mode solo|team --skills a,b[,c]',
   '  stats',
-  '  eval draft [--projects <dir>] [--out <file>] [--limit N]',
+  '  eval draft [--projects <dir>] [--out <file>] [--limit N] [--force]',
   '  eval [--model <name>] [file]',
   '  skills',
   '  --version',
@@ -131,7 +131,7 @@ export class Cli {
       parsed = parseArgs({
         args,
         allowPositionals: true,
-        options: { projects: { type: 'string' }, out: { type: 'string' }, limit: { type: 'string', default: '80' } },
+        options: { projects: { type: 'string' }, out: { type: 'string' }, limit: { type: 'string', default: '80' }, force: { type: 'boolean', default: false } },
       });
     } catch {
       USAGE.forEach(line => this.out(line));
@@ -146,7 +146,7 @@ export class Cli {
     const projects = parsed.values.projects ?? join(home, '.claude', 'projects');
     const out = parsed.values.out ?? join(this.crewcastHome(), 'eval', 'tasks.jsonl');
     try {
-      const { written } = await new Evaluator({ cwd }).draft(projects, out, limit);
+      const { written } = await new Evaluator({ cwd }).draft(projects, out, limit, parsed.values.force);
       this.out(`Drafted ${written} tasks → ${out}. Open it and correct \`actual\` (mode, skills) for each line; delete lines that are not real tasks.`);
       return 0;
     } catch (err) {

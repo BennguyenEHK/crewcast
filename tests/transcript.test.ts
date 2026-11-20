@@ -43,6 +43,20 @@ test('background codex run → team with engine named', async () => {
   }
 });
 
+test('background claude -p run → engines lists claude once', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-transcript-'));
+  try {
+    const file = join(dir, 't.jsonl');
+    const bash = { type: 'tool_use', name: 'Bash', input: { command: 'claude -p "review"', run_in_background: true } };
+    await writeFile(file, JSON.stringify({ type: 'assistant', message: { content: [bash] } }) + '\n', 'utf8');
+    const s = await new TranscriptReader().summarize(file);
+    assert.equal(s.actual.mode, 'team');
+    assert.deepEqual(s.actual.engines, ['claude']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('unknown line types and a corrupt line are skipped and counted', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-transcript-'));
   try {

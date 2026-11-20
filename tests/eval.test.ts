@@ -102,3 +102,41 @@ test('eval CLI: missing tasks file → one-line error and exit 1', async () => {
     assert.equal(lines.length, 1);
   });
 });
+
+test('draft never replaces an existing tasks file without --force', async () => {
+  await withTemp(async dir => {
+    const projects = await seedProjects(dir);
+    const out = join(dir, 'tasks.jsonl');
+    const labelled = '{"id":"owner","task":"hand-labelled","actual":{"mode":"team","skills":[]}}\n';
+    await writeFile(out, labelled, 'utf8');
+
+    await assert.rejects(new Evaluator({ cwd: dir }).draft(projects, out), /exists — pass --force to overwrite/);
+    assert.equal(await readFile(out, 'utf8'), labelled);
+
+    const env = { USERPROFILE: join(dir, 'user'), CREWCAST_HOME: join(dir, 'crewcast') };
+    const lines: string[] = [];
+    const code = await new Cli(l => lines.push(l), { env, cwd: dir }).run(['eval', 'draft', '--projects', projects, '--out', out]);
+    assert.equal(code, 1);
+    assert.deepEqual(lines, [`error: ${out} exists — pass --force to overwrite`]);
+
+    const { written } = await new Evaluator({ cwd: dir }).draft(projects, out, 80, true);
+    assert.equal(written, 3);
+    assert.notEqual(await readFile(out, 'utf8'), labelled);
+  });
+});
+
+test('run skips rows of the wrong shape and counts them; good rows still run', async () => {
+  await withTemp(async dir => {
+    const tasks = join(dir, 'tasks.jsonl');
+    const good = await readFile(tasksFixture, 'utf8');
+    const bad = [
+      '{"id":"no-actual","task":"x"}',
+      '{"id":"numeric-task","task":5,"actual":{"mode":"solo","skills":[]}}',
+      '{"id":"bad-mode","task":"x","actual":{"mode":"maybe","skills":[]}}',
+    ].join('\n');
+    await writeFile(tasks, `${good}${bad}\n`, 'utf8');
+    const report = await new Evaluator({ cwd: dir }).run(tasks, { ask, skills: [], model: 'nimble' });
+    assert.equal(report.n, 3);
+    assert.equal(report.skipped, 3);
+  });
+});

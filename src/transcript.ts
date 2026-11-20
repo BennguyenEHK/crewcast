@@ -45,11 +45,12 @@ export class TranscriptReader {
       }
     }
 
+    engines.add('claude');
     return {
       firstPrompt,
       cwd,
       skipped,
-      actual: { mode: team ? 'team' : 'solo', skills, engines: [...engines, 'claude'] },
+      actual: { mode: team ? 'team' : 'solo', skills, engines: [...engines] },
     };
   }
 

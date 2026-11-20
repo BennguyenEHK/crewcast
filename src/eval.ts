@@ -16,7 +16,7 @@ const run = promisify(execFile);
 export class Evaluator {
   constructor(private readonly deps: { cwd: string }) {}
 
-  async draft(projectsDir: string, outFile: string, limit = 80): Promise<{ written: number }> {
+  async draft(projectsDir: string, outFile: string, limit = 80, force = false): Promise<{ written: number }> {
     const out = resolve(outFile);
     const top = await this.repoRoot();
     if (top && Evaluator.isInside(top, out)) throw new Error(`refusing to write eval tasks inside the git repo at ${top}`);
@@ -29,18 +29,32 @@ export class Evaluator {
       rows.push({ id: basename(file, '.jsonl'), task: s.firstPrompt, actual: s.actual });
     }
     await mkdir(dirname(out), { recursive: true });
-    await writeFile(out, rows.map(r => `${JSON.stringify(r)}\n`).join(''), 'utf8');
+    // 'wx' refuses to replace a file the owner may have hand-labelled; --force opts in to overwrite.
+    try {
+      await writeFile(out, rows.map(r => `${JSON.stringify(r)}\n`).join(''), { encoding: 'utf8', flag: force ? 'w' : 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`${out} exists — pass --force to overwrite`);
+      throw err;
+    }
     return { written: rows.length };
   }
 
   async run(tasksFile: string, deps: { ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; skills: Skill[]; model: string }): Promise<Report> {
     await stat(tasksFile); // readJsonl treats a missing file as empty; a typo should fail, not report FAIL on 0 tasks
-    const { rows, skipped } = await ShadowLog.readJsonl<EvalTask>(tasksFile);
+    const parsed = await ShadowLog.readJsonl<unknown>(tasksFile);
+    const tasks = parsed.rows.filter(Evaluator.isTask);
+    // A valid JSON line of the wrong shape is skipped and counted, never sent to decide.
+    const skipped = parsed.skipped + parsed.rows.length - tasks.length;
     const decider = new Decider({ ...deps, git: null, shadow: false });
     const pairs = [];
     // Sequential: Ollama has one slot.
-    for (const t of rows) pairs.push({ rec: await decider.decide(t.task), actual: t.actual });
+    for (const t of tasks) pairs.push({ rec: await decider.decide(t.task), actual: t.actual });
     return new Agreement().report(pairs, skipped);
+  }
+
+  private static isTask(row: unknown): row is EvalTask {
+    const r = row as Partial<EvalTask> | null;
+    return typeof r?.task === 'string' && (r.actual?.mode === 'solo' || r.actual?.mode === 'team') && Array.isArray(r.actual.skills);
   }
 
   // Transcripts are <projectsDir>/<project>/<session>.jsonl, newest first.
