@@ -227,7 +227,9 @@ Built at setup and refreshed by `doctor`. Stored in `~/.crewcast/`.
 
   **Read live on every decide, no stored copy (owner's decision).** Only the frontmatter is read. A full read took 200–540 ms on the owner's machine; if phase 0 shows the total is too slow, add a small index that is reused while the files' change times are unchanged. Each skill name counts once across all scanned folders. `crewcast skills` lists what crewcast sees.
 - **How skills reach the model:** each shortlisted skill becomes one yes/no question whose text includes the skill's name and description; `state` is the user's task. The `SKILL.md` body is never sent to the decision model: it exceeds the request limits, and it is for doing the work, not for choosing.
-- **MCP servers and plugins:** from each CLI's config.
+- **MCP servers:** chosen per **server**, never per tool (servers can have 200+ tools; the agent picks tools itself once connected). CLI configs hold only how to start a server, not what it does. So `setup`/`doctor` start each server once, read its tool list, and save a one-line description (user-editable) in `~/.crewcast/mcp-catalog.json`. Servers that need a login, or fail to start, get a description from their name plus a "needs description" flag shown in `doctor`. This is the one catalog that is stored, not read live.
+- **Plugins:** not chosen as a whole. A plugin's skills are in the skill list and its MCP servers in the MCP list; choosing those covers it.
+- **CLIs, models, effort, flags:** crewcast's own engine catalog (§7.6), with descriptions written by us. Flags are facts from vendor docs, checked by `doctor`, never chosen by the model. In v1, rules choose from it, not the model.
 - **Shortlist before asking the model.** A user can have 300+ skills; the owner already does. A cheap keyword prefilter cuts the list to ≤ 20. Each shortlisted skill then gets its own yes/no question, because a `choice` allows only 2–26 options and skills are a pick-several, not a pick-one. Builder's choice of prefilter method.
 
 ### 7.6 Engine catalog
