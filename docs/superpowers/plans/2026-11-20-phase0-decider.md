@@ -216,7 +216,7 @@ Details (measured on the owner's machine: 55 user skills, **41 of them links**; 
 - **Follow links** for skill folders. Read-only, so it is safe. Use `stat`, not `lstat`, on each `<skill>` entry.
 - Read only the frontmatter: stop at the closing `---`.
 - **Read live on every decide; no index (owner's decision).** Comment in code: `shortcut: re-reads all skill frontmatter per decide (~0.2–0.5 s measured), add an mtime-stamped index if Task 8 p95 misses 1.5 s.` Task 8 records the skill-scan time separately.
-- CLI: `crewcast skills` lists `name — source dir`, plus totals per source.
+- CLI: `crewcast skills` lists `name — source dir`, plus totals per source and the scan time in ms. Task 8 reads that scan time.
 - `parseFrontmatter`:
   - handles `\r\n`;
   - takes `key: value` with optional `'`/`"` quotes;
