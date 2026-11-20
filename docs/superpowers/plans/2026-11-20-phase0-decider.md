@@ -200,16 +200,27 @@ test('response without answers → bad_response', ...)
 ```ts
 export interface Skill { name: string; description: string; path: string }
 export function parseFrontmatter(text: string): { name?: string; description?: string } | null;
-export function loadSkills(dirs: string[]): Promise<Skill[]>;        // each dir holds <skill>/SKILL.md; missing dirs ignored; dedupe by name, first wins
-export function defaultSkillDirs(home: string, cwd: string): string[];
+export interface SkillDir { dir: string; prefix?: string }           // prefix = plugin name for plugin skills
+export function loadSkills(dirs: SkillDir[]): Promise<Skill[]>;     // each dir holds <skill>/SKILL.md; missing dirs ignored; dedupe by name, first wins
+export function defaultSkillDirs(home: string, cwd: string): Promise<SkillDir[]>;
+export function loadSkillsCached(dirs: SkillDir[], indexFile: string): Promise<Skill[]>; // index = <crewcastHome>/skills-index.json
 export function shortlist(task: string, skills: Skill[], k?: number): Skill[]; // default k = 20
 ```
 
-Details:
+Details (measured on the owner's machine: 55 user skills, **41 of them links**; 81 skills in 14 enabled plugins; a full read takes 540 ms cold / 200 ms warm; frontmatter is 75 KB of 1.6 MB):
 - `defaultSkillDirs` returns, in this order:
   1. `<cwd>/.claude/skills`
   2. `<home>/.claude/skills`
-  3. every `skills` folder under `<home>/.claude/plugins/cache`, up to 4 levels deep (walk with `readdir`; do not follow symlinks or junctions)
+  3. for each key in `<home>/.claude/plugins/installed_plugins.json` → `plugins` whose value in `<home>/.claude/settings.json` → `enabledPlugins` is `true`: each entry's `<installPath>/skills`, with prefix = the plugin name (the key before `@`).
+
+  These two JSON files are internal to Claude Code: read them defensively. If either is missing or unreadable, plugin skills are empty, and `crewcast skills` says so. **Never walk `plugins/cache`**: it holds old versions and disabled plugins (177 skills found there vs the real 136).
+- **Follow links** for skill folders. Read-only, so it is safe. Use `stat`, not `lstat`, on each `<skill>` entry.
+- Read only the frontmatter: stop at the closing `---`.
+- `loadSkillsCached`:
+  - The index stores `{ skills, stamps: Record<path, mtimeMs> }`. Stamps cover each skill dir and each `SKILL.md`.
+  - On call, `stat` every stamped path. If all are unchanged and no dir list changed, return the cached skills. Otherwise rebuild and rewrite the index.
+  - A corrupt index is rebuilt.
+- CLI: `crewcast skills` lists `name — source dir`, plus totals per source.
 - `parseFrontmatter`:
   - handles `\r\n`;
   - takes `key: value` with optional `'`/`"` quotes;
@@ -231,7 +242,10 @@ test('parses folded description block', ...)        // 'description: >\n  line o
 test('strips quotes', ...)
 test('no frontmatter → null; loadSkills skips that skill', ...)
 test('missing dir is ignored', ...)
-test('plugin skill gets plugin: prefix', ...)        // fixture path .../plugins/cache/mkt/superpowers/7.0.2/skills/brainstorming/SKILL.md → 'superpowers:brainstorming'
+test('plugin skill gets plugin: prefix', ...)        // SkillDir {dir, prefix:'superpowers'} + brainstorming/SKILL.md → 'superpowers:brainstorming'
+test('defaultSkillDirs: only enabled plugins at their installPath; disabled plugin excluded; missing json → no plugin dirs', ...) // fixture home with installed_plugins.json + settings.json
+test('linked skill folder is followed', ...)        // fs.symlink(target, link, 'junction') in a temp dir; skip the test if creating the link throws EPERM
+test('loadSkillsCached reuses the index when nothing changed, rebuilds after a SKILL.md edit, rebuilds a corrupt index', ...)
 test('shortlist ranks by overlap and drops zero', ...) // task 'review security of auth code' → 'security-review' first; unrelated skill absent
 ```
 

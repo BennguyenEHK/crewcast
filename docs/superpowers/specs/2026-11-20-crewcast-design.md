@@ -220,7 +220,12 @@ Field names are a sketch; the builder may refine them, but must keep: one value 
 ### 7.5 Catalogs (what the decider can choose from)
 
 Built at setup and refreshed by `doctor`. Stored in `~/.crewcast/`.
-- **Skills:** the name and description from each installed `SKILL.md` frontmatter (`~/.claude/skills`, project `.claude/skills`, plugin skill folders).
+- **Skills: connect, never copy.** crewcast reads the frontmatter (name + description) of each `SKILL.md` in place. That is what Claude itself uses to choose skills; the body (the instructions) is read only when a skill must be handed to a CLI that cannot read skills (§7.8). Sources:
+  - project `.claude/skills`;
+  - `~/.claude/skills`, **following links** (41 of the owner's 55 are links);
+  - **enabled** plugins at their **installed** version, from Claude's `installed_plugins.json` + `settings.json` `enabledPlugins`. Never by walking the plugin cache, which also holds old versions and disabled plugins.
+
+  A small index (`~/.crewcast/skills-index.json`, about 75 KB) is reused while the files' change times are unchanged. A full read took 540 ms cold on the owner's machine, too slow for every prompt. `crewcast skills` lists what crewcast sees.
 - **MCP servers and plugins:** from each CLI's config.
 - **Shortlist before asking the model.** A user can have 300+ skills; the owner already does. A cheap keyword prefilter cuts the list to ≤ 20. Each shortlisted skill then gets its own yes/no question, because a `choice` allows only 2–26 options and skills are a pick-several, not a pick-one. Builder's choice of prefilter method.
 
