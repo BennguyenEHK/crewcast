@@ -9,12 +9,27 @@ const fixture = (name: string) => join('tests', 'fixtures', 'transcripts', name)
 
 test('solo fixture: skills extracted in order, mode solo', async () => {
   const s = await new TranscriptReader().summarize(fixture('solo.jsonl'));
-  assert.equal(s.firstPrompt, 'Fix the login redirect bug');
+  assert.equal(s.firstPrompt, 'Fix the login redirect bug after the session expires');
   assert.deepEqual(s.actual.skills, ['systematic-debugging', 'test-driven-development']);
   assert.equal(s.actual.mode, 'solo');
   assert.deepEqual(s.actual.engines, ['claude']);
   assert.equal(s.cwd, 'D:\\dev\\demo');
   assert.equal(s.skipped, 0);
+});
+
+test('segments: one entry per real prompt, each with only its own tools; short prompts dropped', async () => {
+  const s = await new TranscriptReader().segments(fixture('multi-prompt.jsonl'));
+  assert.equal(s.skipped, 0);
+  assert.deepEqual(s.prompts, [
+    {
+      task: 'Refactor the payment retry queue to use exponential backoff',
+      actual: { mode: 'team', skills: ['alpha'], engines: ['claude'] },
+    },
+    {
+      task: 'Write a regression test for the duplicate invoice bug in billing',
+      actual: { mode: 'solo', skills: ['beta'], engines: ['claude'] },
+    },
+  ]);
 });
 
 test('team fixture: general-purpose Agent → team', async () => {

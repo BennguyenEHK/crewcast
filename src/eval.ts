@@ -22,11 +22,15 @@ export class Evaluator {
     if (top && Evaluator.isInside(top, out)) throw new Error(`refusing to write eval tasks inside the git repo at ${top}`);
 
     const rows: EvalTask[] = [];
+    const reader = new TranscriptReader();
     for (const file of await this.transcripts(projectsDir)) {
       if (rows.length >= limit) break;
-      const s = await new TranscriptReader().summarize(file);
-      if (s.firstPrompt === null) continue;
-      rows.push({ id: basename(file, '.jsonl'), task: s.firstPrompt, actual: s.actual });
+      const base = basename(file, '.jsonl');
+      const { prompts } = await reader.segments(file);
+      for (const [i, p] of prompts.entries()) {
+        if (rows.length >= limit) break;
+        rows.push({ id: `${base}#${i + 1}`, task: p.task, actual: p.actual });
+      }
     }
     await mkdir(dirname(out), { recursive: true });
     // 'wx' refuses to replace a file the owner may have hand-labelled; --force opts in to overwrite.

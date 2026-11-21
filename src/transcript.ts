@@ -1,57 +1,116 @@
-import { ShadowLog, type Actual } from './shadow.js';
+import { createInterface } from 'node:readline';
+import { open } from 'node:fs/promises';
+import type { Actual } from './shadow.js';
 
 export interface TranscriptSummary { firstPrompt: string | null; actual: Actual; cwd: string | null; skipped: number }
+export interface PromptSegment { task: string; actual: Actual }
+export interface TranscriptSegments { prompts: PromptSegment[]; skipped: number }
 
 // Subagent types that are read-only helpers, not a second working agent.
 const SOLO_AGENTS = new Set(['web-fetch', 'Explore', 'claude-code-guide', 'statusline-setup']);
 const ENGINE_CMD = /^\s*(codex|gemini|copilot|kiro-cli|claude\s+-p)(\s|$)/;
+// A shorter prompt is a reply ("yes", "ok go"), not a task; spec §7.2 uses the same cutoff for the hook.
+const MIN_TASK_WORDS = 8;
 
 type Block = { type?: string; name?: string; input?: Record<string, unknown> & { run_in_background?: unknown } };
 type Line = { type?: string; isMeta?: boolean; isSidechain?: boolean; cwd?: unknown; message?: { content?: unknown } };
+type Acc = { skills: string[]; engines: Set<string>; team: boolean };
+
+const newAcc = (): Acc => ({ skills: [], engines: new Set(), team: false });
 
 export class TranscriptReader {
   // Claude Code's transcript format is internal and changes; every line is read on its own.
   async summarize(file: string): Promise<TranscriptSummary> {
-    const { rows, skipped: corrupt } = await ShadowLog.readJsonl<Line>(file);
-    let skipped = corrupt;
+    const counter = { skipped: 0 };
     let firstPrompt: string | null = null;
     let cwd: string | null = null;
-    const skills: string[] = [];
-    const engines = new Set<string>();
-    let team = false;
-
-    for (const row of rows) {
-      if (!row || typeof row !== 'object' || (row.type !== 'user' && row.type !== 'assistant')) {
-        skipped++;
-        continue;
-      }
+    const acc = newAcc();
+    for await (const row of TranscriptReader.rows(file, counter)) {
       if (cwd === null && typeof row.cwd === 'string') cwd = row.cwd;
-      if (firstPrompt === null && row.type === 'user' && !row.isMeta && !row.isSidechain) {
-        firstPrompt = TranscriptReader.prompt(row.message?.content);
+      if (firstPrompt === null) firstPrompt = TranscriptReader.userPrompt(row);
+      TranscriptReader.fold(acc, row);
+    }
+    return { firstPrompt, cwd, skipped: counter.skipped, actual: TranscriptReader.actual(acc) };
+  }
+
+  // One entry per real prompt; tool_use blocks count only until the next real prompt, whatever its length.
+  async segments(file: string): Promise<TranscriptSegments> {
+    const counter = { skipped: 0 };
+    const turns: { task: string; acc: Acc }[] = [];
+    let acc = newAcc(); // tool_use before the first prompt belongs to no prompt
+    for await (const row of TranscriptReader.rows(file, counter)) {
+      const task = TranscriptReader.userPrompt(row);
+      if (task !== null) {
+        acc = newAcc();
+        turns.push({ task, acc });
       }
-      const content = Array.isArray(row.message?.content) ? row.message.content as Block[] : [];
-      for (const block of content) {
-        if (block?.type !== 'tool_use') continue;
-        const input = block.input ?? {};
-        if (block.name === 'Skill' && typeof input.skill === 'string' && !skills.includes(input.skill)) skills.push(input.skill);
-        if ((block.name === 'Agent' || block.name === 'Task') && !SOLO_AGENTS.has(String(input.subagent_type ?? 'general-purpose'))) team = true;
-        if ((block.name === 'Bash' || block.name === 'PowerShell') && input.run_in_background === true) {
-          const m = ENGINE_CMD.exec(String(input.command ?? ''));
-          if (m) {
-            engines.add(m[1].split(/\s/)[0]);
-            team = true;
-          }
+      TranscriptReader.fold(acc, row);
+    }
+    const prompts = turns
+      .filter(t => t.task.split(/\s+/).length >= MIN_TASK_WORDS)
+      .map(t => ({ task: t.task, actual: TranscriptReader.actual(t.acc) }));
+    return { prompts, skipped: counter.skipped };
+  }
+
+  // Streams the file line by line; corrupt lines and rows of other types are skipped and counted.
+  private static async *rows(file: string, counter: { skipped: number }): AsyncGenerator<Line> {
+    let handle;
+    try {
+      handle = await open(file, 'r');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; // a missing file reads as empty
+      throw err;
+    }
+    try {
+      const lines = createInterface({ input: handle.createReadStream(), crlfDelay: Infinity });
+      let first = true;
+      for await (const raw of lines) {
+        const line = first ? raw.replace(/^﻿/, '') : raw;
+        first = false;
+        if (!line.trim()) continue;
+        let row: unknown;
+        try {
+          row = JSON.parse(line);
+        } catch {
+          counter.skipped++;
+          continue;
+        }
+        const type = (row as Line | null)?.type;
+        if (typeof row !== 'object' || row === null || (type !== 'user' && type !== 'assistant')) {
+          counter.skipped++;
+          continue;
+        }
+        yield row as Line;
+      }
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private static userPrompt(row: Line): string | null {
+    if (row.type !== 'user' || row.isMeta || row.isSidechain) return null;
+    return TranscriptReader.prompt(row.message?.content);
+  }
+
+  private static fold(acc: Acc, row: Line): void {
+    const content = Array.isArray(row.message?.content) ? row.message.content as Block[] : [];
+    for (const block of content) {
+      if (block?.type !== 'tool_use') continue;
+      const input = block.input ?? {};
+      if (block.name === 'Skill' && typeof input.skill === 'string' && !acc.skills.includes(input.skill)) acc.skills.push(input.skill);
+      if ((block.name === 'Agent' || block.name === 'Task') && !SOLO_AGENTS.has(String(input.subagent_type ?? 'general-purpose'))) acc.team = true;
+      if ((block.name === 'Bash' || block.name === 'PowerShell') && input.run_in_background === true) {
+        const m = ENGINE_CMD.exec(String(input.command ?? ''));
+        if (m) {
+          acc.engines.add(m[1].split(/\s/)[0]);
+          acc.team = true;
         }
       }
     }
+  }
 
-    engines.add('claude');
-    return {
-      firstPrompt,
-      cwd,
-      skipped,
-      actual: { mode: team ? 'team' : 'solo', skills, engines: [...engines] },
-    };
+  private static actual(acc: Acc): Actual {
+    return { mode: acc.team ? 'team' : 'solo', skills: acc.skills, engines: [...new Set([...acc.engines, 'claude'])] };
   }
 
   // A real user prompt is text; wrappers such as <command-name> start with '<' and are not prompts.

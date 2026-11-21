@@ -47,16 +47,33 @@ test('run on 3 synthetic tasks with fake ask → Report with n 3', async () => {
   assert.equal(report.skipped, 0);
 });
 
-test('draft writes one row per transcript, newest first, with id = base name', async () => {
+test('draft writes one row per real prompt, newest file first, with id = base name #n', async () => {
   await withTemp(async dir => {
     const projects = await seedProjects(dir);
     const out = join(dir, 'eval', 'tasks.jsonl');
     const { written } = await new Evaluator({ cwd: dir }).draft(projects, out);
     assert.equal(written, 3);
     const rows = (await readFile(out, 'utf8')).trim().split('\n').map(l => JSON.parse(l));
-    assert.deepEqual(rows.map(r => r.id), ['webfetch-only', 'team', 'solo']);
-    assert.equal(rows[2].task, 'Fix the login redirect bug');
+    assert.deepEqual(rows.map(r => r.id), ['webfetch-only#1', 'team#1', 'solo#1']);
+    assert.equal(rows[2].task, 'Fix the login redirect bug after the session expires');
     assert.deepEqual(rows[2].actual, { mode: 'solo', skills: ['systematic-debugging', 'test-driven-development'], engines: ['claude'] });
+  });
+});
+
+test('draft emits every real prompt of a file in order and stops at limit across files', async () => {
+  await withTemp(async dir => {
+    const projects = await seedProjects(dir);
+    const multi = join(projects, 'D--dev-demo', 'multi-prompt.jsonl');
+    await writeFile(multi, await readFile(join(transcriptsDir, 'multi-prompt.jsonl'), 'utf8'), 'utf8');
+    const t = new Date(Date.UTC(2026, 10, 10));
+    await utimes(multi, t, t);
+    const out = join(dir, 'tasks.jsonl');
+    const { written } = await new Evaluator({ cwd: dir }).draft(projects, out, 4);
+    assert.equal(written, 4);
+    const rows = (await readFile(out, 'utf8')).trim().split('\n').map(l => JSON.parse(l));
+    assert.deepEqual(rows.map(r => r.id), ['multi-prompt#1', 'multi-prompt#2', 'webfetch-only#1', 'team#1']);
+    assert.equal(rows[0].task, 'Refactor the payment retry queue to use exponential backoff');
+    assert.deepEqual(rows[0].actual, { mode: 'team', skills: ['alpha'], engines: ['claude'] });
   });
 });
 

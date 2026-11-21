@@ -1,3 +1,3 @@
-{"type":"user","cwd":"D:\\dev\\demo","message":{"role":"user","content":"Summarize this page about the API limits"}}
+{"type":"user","cwd":"D:\\dev\\demo","message":{"role":"user","content":"Summarize this page about the API rate limits for us"}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"w1","name":"Agent","input":{"subagent_type":"web-fetch","description":"fetch","prompt":"Read the page"}}]}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The limit is 10 requests per second."}]}}

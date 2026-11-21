@@ -1,3 +1,3 @@
-{"type":"user","cwd":"D:\\dev\\demo","message":{"role":"user","content":"Review the three services in parallel"}}
+{"type":"user","cwd":"D:\\dev\\demo","message":{"role":"user","content":"Review the three services in parallel for auth bugs"}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"a1","name":"Agent","input":{"subagent_type":"general-purpose","description":"review auth","prompt":"Review auth"}}]}}
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"a2","name":"Skill","input":{"skill":"code-review"}}]}}

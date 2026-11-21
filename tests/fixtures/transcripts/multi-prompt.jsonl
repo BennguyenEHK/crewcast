@@ -1,0 +1,6 @@
+{"type":"user","cwd":"D:\\dev\\demo","message":{"role":"user","content":"Refactor the payment retry queue to use exponential backoff"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"m1","name":"Skill","input":{"skill":"alpha"}},{"type":"tool_use","id":"m2","name":"Agent","input":{"subagent_type":"general-purpose","prompt":"review"}}]}}
+{"type":"user","message":{"role":"user","content":"ok go"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"m3","name":"Skill","input":{"skill":"gamma"}}]}}
+{"type":"user","message":{"role":"user","content":"Write a regression test for the duplicate invoice bug in billing"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"m4","name":"Skill","input":{"skill":"beta"}}]}}
