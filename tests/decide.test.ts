@@ -59,7 +59,7 @@ test('one request per decision, with 5 signal questions + one per shortlisted sk
   assert.equal(rec.mode, 'solo');
 });
 
-test('auth task: risk auth → mode team, review agent added, effort high when many_files', async () => {
+test('auth task: risk auth → review agent added, effort high when many_files (mode still from the phrase)', async () => {
   const { ask } = fakeAsk(baseAnswers({
     task_type: choice('fix', 0.9),
     risk_area: choice('auth', 0.9),
@@ -67,7 +67,7 @@ test('auth task: risk auth → mode team, review agent added, effort high when m
   }));
   const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('fix the auth token refresh');
 
-  assert.equal(rec.mode, 'team');
+  assert.equal(rec.mode, 'solo'); // no team phrase: risk/size no longer force team
   assert.equal(rec.signals.risk_area.value, 'auth');
   assert.equal(rec.agents.length, 2);
   assert.deepEqual(rec.agents[0], { role: 'lead', engine: 'claude', model: 'default', effort: 'high', skills: [], mcps: [] });
@@ -84,12 +84,23 @@ test('small docs task: one_file, none → solo, single lead agent, effort null',
   assert.equal(rec.agents[0].effort, null);
 });
 
-test('size probability 0.5 → size uncertain → mode uncertain, value null', async () => {
+test('size uncertain no longer makes the mode uncertain; mode stays solo without a team phrase', async () => {
   const { ask } = fakeAsk(baseAnswers({ size: choice('few_files', 0.5, { one_file: 0.5 }) }));
   const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
 
-  assert.equal(rec.mode, 'uncertain');
+  assert.equal(rec.mode, 'solo');
   assert.deepEqual(rec.signals.size, { value: null, p: 0.5, uncertain: true });
+});
+
+test('team phrase in the task → mode team; whole-word and hyphen-tolerant; no phrase → solo', async () => {
+  const run = async (task: string) => {
+    const { ask } = fakeAsk(baseAnswers());
+    return (await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide(task)).mode;
+  };
+  assert.equal(await run('fix typo, use team agents'), 'team');
+  assert.equal(await run('Use Team-Agents to build X'), 'team');
+  assert.equal(await run('fix a typo'), 'solo');
+  assert.equal(await run('steamagents everywhere'), 'solo'); // phrase inside another word does not match
 });
 
 test('skill noul 0.9 picked, 0.5 → skills_uncertain, 0.1 → dropped', async () => {
@@ -121,8 +132,8 @@ test('branch new only on default branch + writes_files + (dirty or team); slug �
     (await decideWith('Add the new login flow', repoOn('main', true))).branch,
     { action: 'new', name: 'feat/add-the-new-login' },
   );
-  // team mode on a clean default branch also gets a new branch
-  const team = await decideWith('Add the new login flow', repoOn('main', false), { risk_area: choice('auth', 0.9) });
+  // team mode (from a team phrase) on a clean default branch also gets a new branch
+  const team = await decideWith('Add the new login flow use team agents', repoOn('main', false));
   assert.equal(team.branch.action, 'new');
   // clean, solo → keep
   assert.deepEqual((await decideWith('Add the new login flow', repoOn('main', false))).branch, { action: 'keep' });
@@ -148,7 +159,7 @@ test('too_large backend error → all-uncertain record with error, no throw', as
   };
   const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
 
-  assert.equal(rec.mode, 'uncertain');
+  assert.equal(rec.mode, 'solo'); // the phrase rule still decides mode when the model can't answer
   assert.equal(rec.error, 'request body over 64 KiB');
   assert.deepEqual(rec.agents, []);
   assert.deepEqual(rec.branch, { action: 'keep' });
@@ -170,15 +181,15 @@ test('choice key outside the allowed list → that signal uncertain, mode uncert
   const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
 
   assert.deepEqual(rec.signals.size, { value: null, p: 0, uncertain: true });
-  assert.equal(rec.mode, 'uncertain');
+  assert.equal(rec.mode, 'solo');
 });
 
-test('risk_area key outside the allowed list → risk uncertain, mode uncertain (not team)', async () => {
+test('risk_area key outside the allowed list → risk uncertain, mode from the phrase (solo)', async () => {
   const { ask } = fakeAsk(baseAnswers({ risk_area: choice('crypto', 0.95) }));
   const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
 
   assert.deepEqual(rec.signals.risk_area, { value: null, p: 0, uncertain: true });
-  assert.equal(rec.mode, 'uncertain');
+  assert.equal(rec.mode, 'solo');
 });
 
 test('choice answer without probabilities → uncertain signal, no throw', async () => {
@@ -203,10 +214,19 @@ test('bad_request backend error → all-uncertain record with error, no throw', 
   };
   const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
 
-  assert.equal(rec.mode, 'uncertain');
+  assert.equal(rec.mode, 'solo');
   assert.equal(rec.error, 'choice needs 2-26 options, got 1');
   assert.deepEqual(rec.agents, []);
   for (const s of Object.values(rec.signals)) assert.deepEqual(s, { value: null, p: 0, uncertain: true });
+});
+
+test('default shortlist caps skill questions at 8: 5 signals + at most 8 skill_N', async () => {
+  const { ask, seen } = fakeAsk(baseAnswers());
+  const skills = Array.from({ length: 12 }, (_, i) => skill(`deploy-${i}`, 'deploy tool'));
+  await new Decider({ ask, skills, git: null, model: 'systemone' }).decide('deploy the tool');
+  const keys = Object.keys(seen[0].questions);
+  assert.equal(keys.filter(k => !k.startsWith('skill_')).length, 5);
+  assert.ok(keys.filter(k => k.startsWith('skill_')).length <= 8);
 });
 
 test('allowed choice keys match the criteria keys the model is asked about', () => {

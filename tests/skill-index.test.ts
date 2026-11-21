@@ -1,0 +1,79 @@
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { SkillIndex } from '../src/catalog/skill-index.js';
+import type { Skill } from '../src/catalog/skills.js';
+
+// Fake /api/embed: records each call's inputs; a skill/task containing "deploy" is near [1,0], else near [0,1].
+function fakeFetch() {
+  const calls: string[][] = [];
+  const fetchFn = (async (_url: string, init?: { body?: string }) => {
+    const input = (JSON.parse(init!.body!) as { input: string[] }).input;
+    calls.push(input);
+    const embeddings = input.map(s => (s.includes('deploy') ? [1, 0] : [0, 1]));
+    return { ok: true, json: async () => ({ embeddings }) } as unknown as Response;
+  }) as unknown as typeof fetch;
+  return { fetchFn, calls };
+}
+
+async function withSkills(fn: (ctx: { home: string; skills: Skill[]; touch: (name: string) => Promise<void> }) => Promise<void>) {
+  const root = await mkdtemp(join(tmpdir(), 'cc-index-'));
+  try {
+    const make = async (name: string, description: string): Promise<Skill> => {
+      const folder = join(root, 'skills', name);
+      await mkdir(folder, { recursive: true });
+      const path = join(folder, 'SKILL.md');
+      await writeFile(path, `---\nname: ${name}\ndescription: ${description}\n---\n`, 'utf8');
+      return { name, description, path };
+    };
+    const skills = [await make('deployer', 'deploy the service'), await make('gardener', 'water the plants')];
+    const touch = async (name: string) => {
+      const t = new Date(Date.now() + 60_000);
+      await utimes(join(root, 'skills', name, 'SKILL.md'), t, t);
+    };
+    await fn({ home: join(root, 'home'), skills, touch });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('top ranks by cosine similarity to the task', async () => {
+  await withSkills(async ({ home, skills }) => {
+    const { fetchFn } = fakeFetch();
+    const picked = await new SkillIndex({ baseUrl: 'http://x', home, fetchFn }).top('deploy the app', skills, 2);
+    assert.deepEqual(picked.map(s => s.name), ['deployer', 'gardener']);
+  });
+});
+
+test('unchanged skills are not re-embedded: the second call embeds only the task', async () => {
+  await withSkills(async ({ home, skills }) => {
+    const { fetchFn, calls } = fakeFetch();
+    const index = new SkillIndex({ baseUrl: 'http://x', home, fetchFn });
+    await index.top('deploy the app', skills);
+    calls.length = 0; // forget the first call's requests
+    await index.top('deploy the app', skills);
+    assert.deepEqual(calls, [['deploy the app']]); // only the task, no skill texts
+  });
+});
+
+test('a changed mtime re-embeds just that skill', async () => {
+  await withSkills(async ({ home, skills, touch }) => {
+    const { fetchFn, calls } = fakeFetch();
+    const index = new SkillIndex({ baseUrl: 'http://x', home, fetchFn });
+    await index.top('deploy the app', skills);
+    await touch('gardener');
+    calls.length = 0;
+    await index.top('deploy the app', skills);
+    assert.deepEqual(calls, [['gardener: water the plants'], ['deploy the app']]);
+  });
+});
+
+test('an embed error falls back to the keyword shortlist and never throws', async () => {
+  await withSkills(async ({ home, skills }) => {
+    const fetchFn = (async () => { throw new Error('ollama down'); }) as unknown as typeof fetch;
+    const picked = await new SkillIndex({ baseUrl: 'http://x', home, fetchFn }).top('deploy the service', skills);
+    assert.deepEqual(picked.map(s => s.name), ['deployer']); // keyword overlap on "deploy"/"service"
+  });
+});

@@ -50,7 +50,7 @@ export class Evaluator {
     return { written: rows.length, unreadable };
   }
 
-  async run(tasksFile: string, deps: { ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; skills: Skill[]; model: string }): Promise<Report> {
+  async run(tasksFile: string, deps: { ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; skills: Skill[]; model: string; shortlist?: (task: string, skills: Skill[]) => Promise<Skill[]> }): Promise<Report> {
     await stat(tasksFile); // readJsonl treats a missing file as empty; a typo should fail, not report FAIL on 0 tasks
     const parsed = await ShadowLog.readJsonl<unknown>(tasksFile);
     const tasks = parsed.rows.filter(Evaluator.isTask);

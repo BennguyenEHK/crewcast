@@ -34,7 +34,7 @@ test('decide --json with fake ask prints a parseable record', async () => {
     const lines: string[] = [];
     const code = await new Cli(l => lines.push(l), { ask, env, cwd }).run(['decide', '--json', 'fix', 'the', 'login']);
     assert.equal(code, 0);
-    assert.equal(seen[0].model, 'nimble');
+    assert.equal(seen[0].model, 'kev:4b-q4_K_M');
     assert.equal(seen[0].state, 'fix the login');
     assert.equal(lines.length, 1);
     const rec = JSON.parse(lines[0]);
@@ -110,17 +110,17 @@ test('decide prints a note line for a backend-rejected task and the lead skills 
     const ask = async () => { throw new BackendError('bad_request', 'choice needs 2-26 options, got 1'); };
     const lines: string[] = [];
     assert.equal(await new Cli(l => lines.push(l), { ask, env, cwd }).run(['decide', 'x']), 0);
-    assert.equal(lines[0], 'mode: uncertain');
+    assert.equal(lines[0], 'mode: solo');
     assert.equal(lines[1], 'note: choice needs 2-26 options, got 1');
   });
 });
 
 test('decide skills line lists only the lead agent skills, not the review agent skills', async () => {
   await withSandbox(async ({ env, cwd }) => {
-    // risk auth adds the review agent with security-review; the lead has no skills here.
+    // risk auth adds the review agent with security-review; the lead has no skills here. Mode comes from the phrase.
     const ask = async (r: SystemOneRequest) => ({ model: r.model, answers: { ...ANSWERS, risk_area: { type: 'choice' as const, choice: 'auth', probabilities: { auth: 0.9 }, confidence: 0.9 } } });
     const lines: string[] = [];
-    assert.equal(await new Cli(l => lines.push(l), { ask, env, cwd }).run(['decide', 'fix', 'auth']), 0);
+    assert.equal(await new Cli(l => lines.push(l), { ask, env, cwd }).run(['decide', 'fix', 'auth', 'use', 'team', 'agents']), 0);
     assert.equal(lines[0], 'mode: team');
     assert.equal(lines[1], 'skills: none');
   });

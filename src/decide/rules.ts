@@ -6,12 +6,14 @@ export interface Rules {
   thresholds: { choice: number; yes: number; no: number; skill: number };
   leadEngine: string;
   review: { engine: string; model: string; skill: string };
+  teamPhrases: string[];
 }
 
 export const DEFAULT_RULES: Rules = {
   thresholds: { choice: 0.6, yes: 0.7, no: 0.3, skill: 0.7 },
   leadEngine: 'claude',
   review: { engine: 'copilot', model: 'gpt-5-mini', skill: 'security-review' },
+  teamPhrases: ['use team agents', 'team agents', 'teamagents', 'use teamagents', 'use a team', 'parallel agents', 'use subagents'],
 };
 
 const SIZE_SCORE: Record<Size, number> = { one_file: 1, few_files: 3, many_files: 4 };
@@ -46,15 +48,20 @@ export class RuleEngine {
     return { picked, uncertain };
   }
 
+  // Mode comes from the user's words; size/risk only drive lead effort, the review agent, and the branch rule.
+  teamMode(task: string): 'solo' | 'team' {
+    const alts = this.rules.teamPhrases.map(p =>
+      p.trim().split(/\s+/).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\s-]+'));
+    return new RegExp(`\\b(?:${alts.join('|')})\\b`, 'i').test(task) ? 'team' : 'solo';
+  }
+
   apply(signals: Signals, picked: string[], git: GitState | null, task: string): Pick<DecisionRecord, 'mode' | 'branch' | 'agents'> {
     const { size, risk_area, writes_files } = signals;
     const risk = risk_area.value;
     const score = size.value === null || risk === null
       ? null
       : Math.min(5, Math.max(1, SIZE_SCORE[size.value] + (risk !== 'none' ? 1 : 0)));
-    const mode: DecisionRecord['mode'] = score === null
-      ? 'uncertain'
-      : score >= 4 || risk !== 'none' ? 'team' : 'solo';
+    const mode = this.teamMode(task);
 
     const agents: DecisionRecord['agents'] = [{
       role: 'lead',

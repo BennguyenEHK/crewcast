@@ -13,6 +13,7 @@ export interface DeciderDeps {
   rules?: Rules;
   now?: () => number;
   shadow?: boolean;
+  shortlist?: (task: string, skills: Skill[]) => Promise<Skill[]>;
 }
 
 export class Decider {
@@ -26,7 +27,8 @@ export class Decider {
 
   async decide(task: string): Promise<DecisionRecord> {
     const start = this.now();
-    const shortlisted = new SkillCatalog().shortlist(task, this.deps.skills);
+    const shortlist = this.deps.shortlist ?? ((t, s) => Promise.resolve(new SkillCatalog().shortlist(t, s, 8)));
+    const shortlisted = await shortlist(task, this.deps.skills);
     const base = {
       version: 1 as const,
       id: `${new Date().toISOString()}-${randomBytes(3).toString('hex')}`,
@@ -48,7 +50,7 @@ export class Decider {
       if (err instanceof BackendError && (err.code === 'too_large' || err.code === 'bad_request')) {
         return {
           ...base,
-          mode: 'uncertain',
+          mode: this.engine.teamMode(task),
           signals: this.engine.toSignals({}),
           skills_uncertain: [],
           branch: { action: 'keep' },

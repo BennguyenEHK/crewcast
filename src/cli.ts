@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { BackendError, SystemOneClient, type SystemOneRequest, type SystemOneResponse } from './backend/systemone.js';
 import { SkillCatalog, type Skill } from './catalog/skills.js';
+import { SkillIndex } from './catalog/skill-index.js';
 import { Config } from './paths.js';
 import { Decider } from './decide/decide.js';
 import type { DecisionRecord } from './decide/record.js';
@@ -73,7 +74,7 @@ export class Cli {
       parsed = parseArgs({
         args,
         allowPositionals: true,
-        options: { model: { type: 'string', default: 'nimble' }, json: { type: 'boolean', default: false } },
+        options: { model: { type: 'string', default: 'kev:4b-q4_K_M' }, json: { type: 'boolean', default: false } },
       });
     } catch {
       USAGE.forEach(line => this.out(line));
@@ -92,10 +93,11 @@ export class Cli {
     const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
     const git = await new GitInspector().state(cwd);
     const model = parsed.values.model;
+    const index = new SkillIndex({ baseUrl, home: this.crewcastHome() });
 
     let rec;
     try {
-      rec = await new Decider({ ask, skills, git, model }).decide(task);
+      rec = await new Decider({ ask, skills, git, model, shortlist: (t, s) => index.top(t, s) }).decide(task);
     } catch (err) {
       if (!(err instanceof BackendError)) throw err;
       this.backendLine(err, baseUrl, model);
@@ -162,7 +164,7 @@ export class Cli {
       parsed = parseArgs({
         args,
         allowPositionals: true,
-        options: { model: { type: 'string', default: 'nimble' } },
+        options: { model: { type: 'string', default: 'kev:4b-q4_K_M' } },
       });
     } catch {
       USAGE.forEach(line => this.out(line));
@@ -179,10 +181,11 @@ export class Cli {
     const client = new SystemOneClient({ baseUrl });
     const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
     const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+    const index = new SkillIndex({ baseUrl, home: this.crewcastHome() });
 
     let report: Report;
     try {
-      report = await new Evaluator({ cwd }).run(file, { ask, skills, model });
+      report = await new Evaluator({ cwd }).run(file, { ask, skills, model, shortlist: (t, s) => index.top(t, s) });
     } catch (err) {
       if (err instanceof BackendError) {
         this.backendLine(err, baseUrl, model);
