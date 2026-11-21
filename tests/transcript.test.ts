@@ -76,3 +76,16 @@ test('unknown line types and a corrupt line are skipped and counted', async () =
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('older Task tool_use is read exactly like Agent → team', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-transcript-'));
+  try {
+    const file = join(dir, 't.jsonl');
+    const task = { type: 'tool_use', name: 'Task', input: { subagent_type: 'general-purpose', prompt: 'review' } };
+    await writeFile(file, JSON.stringify({ type: 'assistant', message: { content: [task] } }) + '\n', 'utf8');
+    const s = await new TranscriptReader().summarize(file);
+    assert.equal(s.actual.mode, 'team');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

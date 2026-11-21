@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -81,5 +81,33 @@ test('label with a bad mode or missing --skills → usage and exit 1', async () 
     assert.equal(await cli.run(['label', 'x', '--mode', 'both', '--skills', 'a']), 1);
     assert.equal(await cli.run(['label', 'x', '--mode', 'solo']), 1);
     assert.match(lines.join('\n'), /usage: crewcast/);
+  });
+});
+
+test('stats skips null and wrong-shape shadow and label lines, counting them as skipped', async () => {
+  await withSandbox(async ({ env, cwd, home }) => {
+    assert.equal(await new Cli(() => {}, { ask, env, cwd }).run(['decide', 'fix', 'it']), 0);
+    await writeFile(join(home, 'shadow.jsonl'), (await readFile(join(home, 'shadow.jsonl'), 'utf8')) + 'null\n{}\n', 'utf8');
+    await writeFile(join(home, 'labels.jsonl'), 'null\n{"id":"x"}\n', 'utf8');
+    const lines: string[] = [];
+    assert.equal(await new Cli(l => lines.push(l), { env, cwd }).run(['stats']), 0);
+    assert.match(lines.join('\n'), /skipped lines: 4/);
+    assert.match(lines.join('\n'), /unlabelled: 1/);
+  });
+});
+
+test('label prints labelled <id>; an id not in the shadow log also gets a warning, and is still saved', async () => {
+  await withSandbox(async ({ env, cwd, home }) => {
+    assert.equal(await new Cli(() => {}, { ask, env, cwd }).run(['decide', 'fix', 'it']), 0);
+    const { rows } = await ShadowLog.readJsonl<{ id: string }>(join(home, 'shadow.jsonl'));
+    const lines: string[] = [];
+    const cli = new Cli(l => lines.push(l), { env, cwd });
+    assert.equal(await cli.run(['label', rows[0].id, '--mode', 'solo', '--skills', '']), 0);
+    assert.deepEqual(lines, [`labelled ${rows[0].id}`]);
+    lines.length = 0;
+    assert.equal(await cli.run(['label', 'nope', '--mode', 'team', '--skills', 'a']), 0);
+    assert.deepEqual(lines, ['labelled nope', 'warning: nope is not in the shadow log']);
+    const labels = await readFile(join(home, 'labels.jsonl'), 'utf8');
+    assert.match(labels, /"id":"nope"/);
   });
 });

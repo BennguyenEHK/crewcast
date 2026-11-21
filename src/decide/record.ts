@@ -1,6 +1,10 @@
-export type TaskType = 'implement' | 'fix' | 'review' | 'research' | 'plan' | 'docs' | 'test' | 'refactor' | 'ops';
-export type RiskArea = 'none' | 'auth' | 'db_schema' | 'payments' | 'deploy' | 'secrets';
-export type Size = 'one_file' | 'few_files' | 'many_files';
+// The allowed keys of each choice signal; a model answer outside them is uncertain, never a guess.
+export const TASK_TYPES = ['implement', 'fix', 'review', 'research', 'plan', 'docs', 'test', 'refactor', 'ops'] as const;
+export const RISK_AREAS = ['none', 'auth', 'db_schema', 'payments', 'deploy', 'secrets'] as const;
+export const SIZES = ['one_file', 'few_files', 'many_files'] as const;
+export type TaskType = (typeof TASK_TYPES)[number];
+export type RiskArea = (typeof RISK_AREAS)[number];
+export type Size = (typeof SIZES)[number];
 
 export interface Signal<T> { value: T | null; p: number; uncertain?: true } // value null only when uncertain
 

@@ -83,8 +83,7 @@ test('timeout → exit 2 and one line naming the base URL', async () => {
     const lines: string[] = [];
     const code = await new Cli(l => lines.push(l), { ask, env: { ...env, OLLAMA_HOST: '127.0.0.1:9999' }, cwd }).run(['decide', 'x']);
     assert.equal(code, 2);
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /http:\/\/127\.0\.0\.1:9999/);
+    assert.deepEqual(lines, ['Ollama at http://127.0.0.1:9999 did not answer in 10 s — the model may still be loading; run the command again']);
   });
 });
 
@@ -103,5 +102,26 @@ test('decide without a task → usage and exit 1', async () => {
     const lines: string[] = [];
     assert.equal(await new Cli(l => lines.push(l), { env, cwd }).run(['decide']), 1);
     assert.match(lines.join('\n'), /usage: crewcast/);
+  });
+});
+
+test('decide prints a note line for a backend-rejected task and the lead skills only', async () => {
+  await withSandbox(async ({ env, cwd }) => {
+    const ask = async () => { throw new BackendError('bad_request', 'choice needs 2-26 options, got 1'); };
+    const lines: string[] = [];
+    assert.equal(await new Cli(l => lines.push(l), { ask, env, cwd }).run(['decide', 'x']), 0);
+    assert.equal(lines[0], 'mode: uncertain');
+    assert.equal(lines[1], 'note: choice needs 2-26 options, got 1');
+  });
+});
+
+test('decide skills line lists only the lead agent skills, not the review agent skills', async () => {
+  await withSandbox(async ({ env, cwd }) => {
+    // risk auth adds the review agent with security-review; the lead has no skills here.
+    const ask = async (r: SystemOneRequest) => ({ model: r.model, answers: { ...ANSWERS, risk_area: { type: 'choice' as const, choice: 'auth', probabilities: { auth: 0.9 }, confidence: 0.9 } } });
+    const lines: string[] = [];
+    assert.equal(await new Cli(l => lines.push(l), { ask, env, cwd }).run(['decide', 'fix', 'auth']), 0);
+    assert.equal(lines[0], 'mode: team');
+    assert.equal(lines[1], 'skills: none');
   });
 });

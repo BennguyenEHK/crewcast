@@ -34,7 +34,7 @@ export class TranscriptReader {
         if (block?.type !== 'tool_use') continue;
         const input = block.input ?? {};
         if (block.name === 'Skill' && typeof input.skill === 'string' && !skills.includes(input.skill)) skills.push(input.skill);
-        if (block.name === 'Agent' && !SOLO_AGENTS.has(String(input.subagent_type ?? 'general-purpose'))) team = true;
+        if ((block.name === 'Agent' || block.name === 'Task') && !SOLO_AGENTS.has(String(input.subagent_type ?? 'general-purpose'))) team = true;
         if ((block.name === 'Bash' || block.name === 'PowerShell') && input.run_in_background === true) {
           const m = ENGINE_CMD.exec(String(input.command ?? ''));
           if (m) {

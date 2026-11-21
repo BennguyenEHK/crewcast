@@ -4,6 +4,8 @@ import { BackendError, type Answer, type SystemOneRequest, type SystemOneRespons
 import { Decider } from '../src/decide/decide.js';
 import type { GitState } from '../src/decide/record.js';
 import type { Skill } from '../src/catalog/skills.js';
+import { QuestionBuilder } from '../src/decide/questions.js';
+import { RISK_AREAS, SIZES, TASK_TYPES } from '../src/decide/record.js';
 
 const choice = (choiceValue: string, p: number, others: Record<string, number> = {}): Answer => ({
   type: 'choice',
@@ -161,4 +163,56 @@ test('ollama_unreachable is re-thrown', async () => {
     new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file'),
     { code: 'ollama_unreachable' },
   );
+});
+
+test('choice key outside the allowed list → that signal uncertain, mode uncertain, no NaN', async () => {
+  const { ask } = fakeAsk(baseAnswers({ size: choice('huge', 0.95) }));
+  const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
+
+  assert.deepEqual(rec.signals.size, { value: null, p: 0, uncertain: true });
+  assert.equal(rec.mode, 'uncertain');
+});
+
+test('risk_area key outside the allowed list → risk uncertain, mode uncertain (not team)', async () => {
+  const { ask } = fakeAsk(baseAnswers({ risk_area: choice('crypto', 0.95) }));
+  const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
+
+  assert.deepEqual(rec.signals.risk_area, { value: null, p: 0, uncertain: true });
+  assert.equal(rec.mode, 'uncertain');
+});
+
+test('choice answer without probabilities → uncertain signal, no throw', async () => {
+  const broken = { type: 'choice', choice: 'fix', confidence: 0.9 } as unknown as Answer;
+  const { ask } = fakeAsk(baseAnswers({ task_type: broken }));
+  const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
+
+  assert.deepEqual(rec.signals.task_type, { value: null, p: 0, uncertain: true });
+});
+
+test('noul answer without a number → uncertain signal, no throw', async () => {
+  const broken = { type: 'noul' } as unknown as Answer;
+  const { ask } = fakeAsk(baseAnswers({ writes_files: broken }));
+  const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
+
+  assert.deepEqual(rec.signals.writes_files, { value: null, p: 0, uncertain: true });
+});
+
+test('bad_request backend error → all-uncertain record with error, no throw', async () => {
+  const ask = async (): Promise<SystemOneResponse> => {
+    throw new BackendError('bad_request', 'choice needs 2-26 options, got 1');
+  };
+  const rec = await new Decider({ ask, skills: [], git: null, model: 'systemone' }).decide('document the config file');
+
+  assert.equal(rec.mode, 'uncertain');
+  assert.equal(rec.error, 'choice needs 2-26 options, got 1');
+  assert.deepEqual(rec.agents, []);
+  for (const s of Object.values(rec.signals)) assert.deepEqual(s, { value: null, p: 0, uncertain: true });
+});
+
+test('allowed choice keys match the criteria keys the model is asked about', () => {
+  const q = new QuestionBuilder().build([]);
+  const keys = (name: string) => Object.keys((q[name] as { criteria: Record<string, string> }).criteria);
+  assert.deepEqual(keys('task_type'), [...TASK_TYPES]);
+  assert.deepEqual(keys('risk_area'), [...RISK_AREAS]);
+  assert.deepEqual(keys('size'), [...SIZES]);
 });

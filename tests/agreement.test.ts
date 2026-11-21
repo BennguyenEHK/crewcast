@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Agreement } from '../src/agreement.js';
 import type { DecisionRecord } from '../src/decide/record.js';
 
-function rec(over: { mode?: DecisionRecord['mode']; skills?: string[]; ms?: number; uncertain?: boolean } = {}): DecisionRecord {
+function rec(over: { mode?: DecisionRecord['mode']; skills?: string[]; ms?: number; uncertain?: boolean; error?: string } = {}): DecisionRecord {
   const sig = (value: any, uncertain?: true) => ({ value, p: 0.9, ...(uncertain ? { uncertain } : {}) });
   return {
     version: 1,
@@ -23,6 +23,7 @@ function rec(over: { mode?: DecisionRecord['mode']; skills?: string[]; ms?: numb
     agents: [{ role: 'lead', engine: 'claude', model: 'm', effort: null, skills: over.skills ?? [], mcps: [] }],
     ms: over.ms ?? 100,
     backend: 'm@ollama',
+    ...(over.error ? { error: over.error } : {}),
   };
 }
 
@@ -35,6 +36,11 @@ test('skills agree with 2 extras, disagree with 3 extras or a missing one', () =
   assert.equal(agrees(['a', 'b', 'c', 'd', 'e'], ['a', 'b']), false); // 3 extras
   assert.equal(agrees(['a', 'b'], ['a', 'c']), false);            // c missing from the lead
   assert.equal(agrees(LEAD, LEAD), true);
+});
+
+test('a record with error counts as skills disagreement even when the skills match', () => {
+  const r = rec({ mode: 'uncertain', skills: ['a'], error: 'request body over 64 KiB' });
+  assert.equal(new Agreement().agrees(r, { mode: 'solo', skills: ['a'] }).skills, false);
 });
 
 test('uncertain mode counts as disagreement', () => {

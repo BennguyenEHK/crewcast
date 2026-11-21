@@ -13,7 +13,7 @@ export class Agreement {
     const extras = picked.filter(s => !actual.skills.includes(s)).length;
     return {
       mode: rec.mode === actual.mode,
-      skills: actual.skills.every(s => picked.includes(s)) && extras <= 2,
+      skills: !rec.error && actual.skills.every(s => picked.includes(s)) && extras <= 2,
     };
   }
 

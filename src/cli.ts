@@ -108,7 +108,8 @@ export class Cli {
       return 0;
     }
     this.out(`mode: ${rec.mode}`);
-    this.out(`skills: ${rec.agents.flatMap(a => a.skills).join(', ') || 'none'}`);
+    if (rec.error) this.out(`note: ${rec.error}`);
+    this.out(`skills: ${rec.agents[0]?.skills.join(', ') || 'none'}`);
     this.out(`branch: ${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`);
     this.out(`ms: ${rec.ms}`);
     return 0;
@@ -121,7 +122,7 @@ export class Cli {
   private backendLine(err: BackendError, baseUrl: string, model: string): void {
     if (err.code === 'ollama_unreachable') this.out(`Ollama not reachable at ${baseUrl} — start Ollama`);
     else if (err.code === 'model_missing') this.out(`model '${model}' not found — run: ollama pull ${model}`);
-    else if (err.code === 'timeout') this.out(`Ollama at ${baseUrl} did not answer in time`);
+    else if (err.code === 'timeout') this.out(`Ollama at ${baseUrl} did not answer in 10 s — the model may still be loading; run the command again`);
     else this.out(`error: ${err.message}`);
   }
 
@@ -226,7 +227,11 @@ export class Cli {
       return 1;
     }
     const actual: Actual = { mode, skills: skills.split(',').map(s => s.trim()).filter(Boolean) };
-    await new ShadowLog(this.crewcastHome()).addLabel(id, actual);
+    const home = this.crewcastHome();
+    await new ShadowLog(home).addLabel(id, actual);
+    this.out(`labelled ${id}`);
+    const shadow = await ShadowLog.readJsonl<{ id?: unknown }>(join(home, 'shadow.jsonl'));
+    if (!shadow.rows.some(r => r?.id === id)) this.out(`warning: ${id} is not in the shadow log`);
     return 0;
   }
 
@@ -234,16 +239,20 @@ export class Cli {
     const home = this.crewcastHome();
     const shadow = await ShadowLog.readJsonl<DecisionRecord>(join(home, 'shadow.jsonl'));
     const labels = await ShadowLog.readJsonl<{ id: string; actual: Actual }>(join(home, 'labels.jsonl'));
+    // A line that parses but has the wrong shape (null, {}) is skipped too, never a crash.
+    const recs = shadow.rows.filter(r => typeof r?.id === 'string' && r.signals && Array.isArray(r.agents));
+    const actuals = labels.rows.filter(l => typeof l?.id === 'string' && Array.isArray(l.actual?.skills));
     // Later labels overwrite earlier ones in the Map, so the last label for an id wins.
-    const actualById = new Map(labels.rows.map(l => [l.id, l.actual]));
+    const actualById = new Map(actuals.map(l => [l.id, l.actual]));
     const pairs: { rec: DecisionRecord; actual: Actual }[] = [];
     let unlabelled = 0;
-    for (const rec of shadow.rows) {
+    for (const rec of recs) {
       const actual = actualById.get(rec.id);
       if (actual) pairs.push({ rec, actual });
       else unlabelled++;
     }
-    this.printReport(new Agreement().report(pairs, shadow.skipped + labels.skipped), unlabelled);
+    const shapeSkipped = (shadow.rows.length - recs.length) + (labels.rows.length - actuals.length);
+    this.printReport(new Agreement().report(pairs, shadow.skipped + labels.skipped + shapeSkipped), unlabelled);
     return 0;
   }
 }

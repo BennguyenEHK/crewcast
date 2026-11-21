@@ -1,6 +1,6 @@
 import type { Answer, SystemOneResponse } from '../backend/systemone.js';
 import type { Skill } from '../catalog/skills.js';
-import type { DecisionRecord, GitState, RiskArea, Signal, Size, TaskType } from './record.js';
+import { RISK_AREAS, SIZES, TASK_TYPES, type DecisionRecord, type GitState, type RiskArea, type Signal, type Size, type TaskType } from './record.js';
 
 export interface Rules {
   thresholds: { choice: number; yes: number; no: number; skill: number };
@@ -24,10 +24,10 @@ export class RuleEngine {
 
   toSignals(answers: SystemOneResponse['answers']): Signals {
     return {
-      task_type: this.choice<TaskType>(answers.task_type),
+      task_type: this.choice<TaskType>(answers.task_type, TASK_TYPES),
       writes_files: this.noul(answers.writes_files),
-      risk_area: this.choice<RiskArea>(answers.risk_area),
-      size: this.choice<Size>(answers.size),
+      risk_area: this.choice<RiskArea>(answers.risk_area, RISK_AREAS),
+      size: this.choice<Size>(answers.size, SIZES),
       needs_web: this.noul(answers.needs_web),
     };
   }
@@ -91,15 +91,16 @@ export class RuleEngine {
     return `feat/${words}`.slice(0, 40);
   }
 
-  private choice<T extends string>(a: Answer | undefined): Signal<T> {
-    if (a?.type !== 'choice') return unsure<T>();
-    const p = a.probabilities[a.choice] ?? 0;
+  private choice<T extends string>(a: Answer | undefined, allowed: readonly T[]): Signal<T> {
+    if (a?.type !== 'choice' || !allowed.includes(a.choice as T)) return unsure<T>();
+    const p = a.probabilities?.[a.choice];
+    if (typeof p !== 'number') return unsure<T>();
     if (p < this.rules.thresholds.choice) return unsure<T>(p);
     return { value: a.choice as T, p };
   }
 
   private noul(a: Answer | undefined): Signal<boolean> {
-    if (a?.type !== 'noul') return unsure<boolean>();
+    if (a?.type !== 'noul' || typeof a.noul !== 'number') return unsure<boolean>();
     const { yes, no } = this.rules.thresholds;
     const p = Math.max(a.noul, 1 - a.noul);
     if (a.noul >= yes) return { value: true, p };
