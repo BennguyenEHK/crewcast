@@ -43,7 +43,9 @@ export class SystemOneClient {
       throw new BackendError('ollama_unreachable', `cannot reach ${this.baseUrl}`);
     }
     if (res.status === 404) throw new BackendError('model_missing', `model ${req.model} is not pulled`);
-    if (res.status === 400) throw new BackendError(/token|length/i.test(text) ? 'too_large' : 'bad_request', text);
+    // Ollama answers an over-long prompt with 400 or 500 ("Context size has been exceeded.").
+    if ((res.status === 400 || res.status === 500) && /context|token|length/i.test(text)) throw new BackendError('too_large', text);
+    if (res.status === 400) throw new BackendError('bad_request', text);
     if (!res.ok) throw new BackendError('bad_response', `HTTP ${res.status}`);
     let body: Partial<SystemOneResponse> | null;
     try {

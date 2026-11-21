@@ -70,6 +70,16 @@ test('HTTP 400 → bad_request, or too_large when the body mentions tokens', asy
   await assert.rejects(client(fake(async () => new Response('prompt exceeds token limit', { status: 400 }))).ask(req()), codeIs('too_large'));
 });
 
+test('HTTP 500 with Ollama context-size body → too_large', async () => {
+  const fetchFn = fake(async () => Response.json({ error: 'Context size has been exceeded.' }, { status: 500 }));
+  await assert.rejects(client(fetchFn).ask(req()), codeIs('too_large'));
+});
+
+test('HTTP 500 with an unrelated body → bad_response', async () => {
+  const fetchFn = fake(async () => new Response('internal failure', { status: 500 }));
+  await assert.rejects(client(fetchFn).ask(req()), codeIs('bad_response'));
+});
+
 test('response without answers → bad_response', async () => {
   const fetchFn = fake(async () => Response.json({ model: 'systemone' }));
   await assert.rejects(client(fetchFn).ask(req()), codeIs('bad_response'));
