@@ -121,10 +121,12 @@ The repo also ships a **Claude Code plugin manifest**. Its MCP entry runs `npx -
 |---|---|
 | `crewcast` CLI | `setup`, `doctor`, `uninstall`, `decide "<task>"` (prints the decision record), `stats` (shadow-mode results). Later `run`, `pc`. |
 | `crewcast mcp` | MCP server over **stdio only** (no network port). Tools: `decide`, `catalog`, and, in phase 2, `dispatch`, `post_message`, `read_messages`, `run_status`. |
-| crewcast skill | Tells Claude when to call `decide`, how to read the decision record, how to dispatch, the ASD-STE100 explanation rules, and the ship steps (§7.9). |
+| crewcast skill | Tells Claude when to call `decide`, how to read the decision record, how to dispatch, the lead's captain role and review flow (§7.13), the ASD-STE100 explanation rules, and the ship steps (§7.9). |
 | Claude Code hook | A `UserPromptSubmit` hook. It runs `crewcast decide` on each prompt and adds the decision record as one short context block. **It fails open:** on error, timeout (2 s) or a short prompt (under ~8 words, e.g. "thanks", "yes"), it adds nothing and the prompt goes through unchanged. |
 
 The hook is the only way to guarantee the decider runs on every task, because a skill runs only when Claude chooses to call it. Typing `/crewcast <task>` always forces it.
+
+**When the record says `mode: team`, the hook's context block also carries one line for the lead:** "You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill, §7.13)." So the rule reaches Claude on every team task, even when Claude does not open the skill.
 
 **Two speeds (Claude's call):**
 - **Fast decide (hook):** only the signal questions, skill/MCP picks and a solo-or-team suggestion. All signals go to Nimble as **one schema call** (Nimble takes several enum and boolean fields in one request), so it is one model pass, not seven. No unit splitting, no pair questions, no Claude call. Must fit the 2 s hook limit.
@@ -266,9 +268,10 @@ Known recipes from the owner's setup, all to be verified by the builder:
   - Read-only workers (review, research) run in the main folder.
   - Each **writing** worker gets its own git worktree (`<repo>-wt/<engine>-<n>`, its own branch, same history).
   - No two writers ever share a folder.
-- **File ownership.** The full decide gives each writer a list of the files it owns. Before merging, the lead checks that the worker's diff stays inside that list.
+- **File ownership.** The full decide gives each writer a list of the files it owns. Before merging, the lead checks that the worker's changed-file list stays inside that list. It checks the list of file names, not the diff (§7.13).
 - **Merge.**
-  - Only the lead merges, after reviewing the diff. The lead resolves any conflicts.
+  - Only the lead decides to merge. It decides from the worker's report, the test result and the reviewers' verdicts, never by reading the diff (§7.13).
+  - A worker resolves any merge conflicts, and the reviewers check that fix like any other change.
   - After merging: remove the worktree link first, then the folder, then the branch.
 - **Same project rules.**
   - One shared `AGENTS.md` holds the project rules. `CLAUDE.md` imports it (`@AGENTS.md`), and Gemini is set to read it as a context file. Codex reads it natively.
@@ -300,7 +303,7 @@ Known recipes from the owner's setup, all to be verified by the builder:
 - **ASD-STE100:** all explanations to the user follow a short list of STE rules written in our own words: short sentences, one instruction per sentence, active voice, one meaning per word. Do not copy the official specification or its word dictionary; they come with a license.
 - **Ship steps,** in this order, after code or a plan is done:
   1. optimize
-  2. security review (Copilot `gpt-5-mini`, a different model family from Claude)
+  2. review by the reviewer team (§7.13): CodeRabbit CLI for the full review of each finished task, and Copilot `gpt-5-mini` for the security review. Both are different model families from Claude.
   3. secret scan and dependency audit
   4. type check, lint, tests, build
   5. commit on a branch (may be automatic)
@@ -336,6 +339,54 @@ Known recipes from the owner's setup, all to be verified by the builder:
 - No command that turns permission checks off. No admin or elevation, ever, in this version.
 - The mailbox and logs never store environment variables or tokens. The builder adds a redaction pass for common key patterns.
 - Skill copies are tracked by the manifest, so a skill folder crewcast did not create is never touched.
+
+### 7.13 The lead's role: team captain (owner's decision, 2026-11-21)
+
+**Who is who:**
+- **The user is the CEO.** The user sets the goal, and says "yes" before any push or deploy.
+- **The lead (the orchestrator, Claude by default) is the team captain**, like a tech lead who does not write code.
+- **Workers** (Codex, Gemini, Copilot, Kiro) write the code, on the user's subscriptions.
+- **Reviewers** (CodeRabbit CLI and Copilot) check the code.
+
+**When it applies:** when the decision record says `mode: team`. In `solo` mode there is no team, so the lead does the task itself (§1).
+
+**What the captain does:**
+1. **Plan.** Read the task and the decision record. Split the work into parts.
+2. **Assign.** Give each part to one worker with a task card: the goal, the files that worker owns, and what "done" means (§7.7).
+3. **Guide with ideas only.** Give design directions, for example "use a queue here" or "keep this in one module". Never give code.
+4. **Read the worker's report.** Read the report only, never the code. Look for these warning signs:
+   - The report claims tests, but shows no test output.
+   - The changed-file list includes files outside the worker's own list.
+   - The report says "done", but it also lists concerns.
+   - The report does not match the task, or it skips a part of the task.
+5. **Do one cheap check.** For example, run the tests and read only pass or fail.
+6. **Send the work to review:**
+   - Normal case: CodeRabbit CLI reviews the finished task.
+   - A warning sign: a reviewer inspects that point. Reviewers read only; they do not edit.
+   - Ship step 2 (§7.9): Copilot `gpt-5-mini` does the security review.
+7. **Route fixes.** Send the reviewer's findings back to the worker who wrote the code. Then the reviewer re-checks only the fix.
+8. **Make the important calls:**
+   - When the two reviewers disagree, the captain decides.
+   - When a fix still fails after 3 rounds, the captain decides: accept with a recorded reason, re-assign the part, or ask the user.
+   - The captain decides when to merge.
+9. **Report to the user.** Give a short ASD-STE100 summary: what was done, what was decided, and what is left.
+
+**What the captain never does:**
+- It never writes code or fixes.
+- It never reads or reviews diffs.
+- It never resolves merge conflicts. A worker does that (§7.7).
+- It never pushes or deploys without the user's "yes" for that push (§7.9).
+
+**Why:**
+- **Fewer lead tokens.** Reading code and diffs is the biggest cost for the lead. The captain reads only short reports.
+- **Independent checks.** A model from a different company checks every change, never the worker that wrote it.
+- **The subscriptions do the heavy work.**
+
+**Reviewer limits (checked 2026-11-21; verify on the user's account):**
+- CodeRabbit CLI installs natively on Windows (PowerShell installer). Its free tier allows about 3 CLI reviews per hour; sources differ, and some say 2. So it gets one full review per finished task, not one per fix round.
+- Copilot does the security review and the quick re-checks after fixes.
+
+**How it is enforced:** crewcast cannot force a model's behaviour. These rules live in the crewcast skill, and the hook repeats the one-line captain rule on every team task (§7.2).
 
 ## 8. Phases
 
@@ -377,6 +428,11 @@ Known recipes from the owner's setup, all to be verified by the builder:
 - **Test set:** Claude drafts the labels for ~50 past tasks from the owner's sessions and history; the owner corrects them (~1 hour). Labels are at the level of mode, engines and skills. Signal-level labels (task_type, size, risk_area) are drafted by Claude and only spot-checked.
 - **Approach A, phased:** the decider first, then the dispatcher and mailbox.
 - **Model storage** goes where the free space is, never in the repo (§7.11). The owner suggested a `model/` folder in the project; Claude advised against it for the reasons in §7.11, and the owner can override.
+
+**Decided by the owner on 2026-11-21**
+- **The lead is the team captain** in team mode (§7.13). It plans, assigns, guides with ideas, reads reports, routes reviews and fixes, and makes the important calls. It never writes code, never reviews diffs, and never resolves merge conflicts.
+- **Reviewer team: CodeRabbit CLI and Copilot** (§7.13). Reviewers find problems; the worker that wrote the code fixes them.
+- **Workers keep running on the CLI subscriptions** (Phase 2 CLI dispatch stays). Claude Code's own subagents routed to API-key providers were considered and not chosen: they would make crewcast smaller, but they need paid API keys, and they cannot use the Codex, Gemini, Copilot or Kiro subscriptions.
 
 **Still open (default applies unless the owner changes it)**
 - Shadow-mode takeover threshold: ≥ 90% over ≥ 50 tasks.
