@@ -150,6 +150,8 @@ The decision model is asked a fixed set of concrete questions. Each answer is on
 | `skills` | choice, top-k | shortlist from the skill catalog (§7.5) |
 | `mcps`, `plugins` | choice, top-k | from the catalog |
 
+**Solo or team comes from the user's own words (owner's decision, 2026-11-21).** If the prompt contains a team phrase ("use team agents", "teamagents", "parallel agents", …; the list is in the rules), the mode is `team`. Otherwise it is `solo`. The model does not decide the mode: in phase 0 every model scored 0–43 % on it. `size` and `risk_area` are still asked, but they only set effort, the review agent and the branch. For team tasks, the real size comes later from the file list (§7.13).
+
 **Plain rules** turn the signals into the decision. The rules live in a readable config file (`rules.yaml` or similar, builder's choice), so the user can edit them. The default rules come from the owner's Agent Policy:
 - size and risk give a 1–5 score;
 - score 1–2 → solo or one cheap worker;
@@ -227,12 +229,16 @@ Built at setup and refreshed by `doctor`. Stored in `~/.crewcast/`.
   - `~/.claude/skills`, **following links** (41 of the owner's 55 are links);
   - **enabled** plugins at their **installed** version, from Claude's `installed_plugins.json` + `settings.json` `enabledPlugins`. Never by walking the plugin cache, which also holds old versions and disabled plugins.
 
-  **Read live on every decide, no stored copy (owner's decision).** Only the frontmatter is read. A full read took 200–540 ms on the owner's machine; if phase 0 shows the total is too slow, add a small index that is reused while the files' change times are unchanged. Each skill name counts once across all scanned folders. `crewcast skills` lists what crewcast sees.
+  **Changed 2026-11-21:** a small skill-embedding index (`~/.crewcast/skill-index.json`) is now kept. Each skill's vector is stored with the file's change time, and only new or changed skills are embedded again. The frontmatter itself is still read live. *(The earlier rule, kept for history:)* **Read live on every decide, no stored copy (owner's decision).** Only the frontmatter is read. A full read took 200–540 ms on the owner's machine; if phase 0 shows the total is too slow, add a small index that is reused while the files' change times are unchanged. Each skill name counts once across all scanned folders. `crewcast skills` lists what crewcast sees.
 - **How skills reach the model:** each shortlisted skill becomes one yes/no question whose text includes the skill's name and description; `state` is the user's task. The `SKILL.md` body is never sent to the decision model: it exceeds the request limits, and it is for doing the work, not for choosing.
 - **MCP servers:** chosen per **server**, never per tool (servers can have 200+ tools; the agent picks tools itself once connected). CLI configs hold only how to start a server, not what it does. So `setup`/`doctor` start each server once, read its tool list, and save a one-line description (user-editable) in `~/.crewcast/mcp-catalog.json`. Servers that need a login, or fail to start, get a description from their name plus a "needs description" flag shown in `doctor`. This is the one catalog that is stored, not read live.
 - **Plugins:** not chosen as a whole. A plugin's skills are in the skill list and its MCP servers in the MCP list; choosing those covers it.
 - **CLIs, models, effort, flags:** crewcast's own engine catalog (§7.6), with descriptions written by us. Flags are facts from vendor docs, checked by `doctor`, never chosen by the model. In v1, rules choose from it, not the model.
-- **Shortlist before asking the model.** A user can have 300+ skills; the owner already does. A cheap keyword prefilter cuts the list to ≤ 20. Each shortlisted skill then gets its own yes/no question, because a `choice` allows only 2–26 options and skills are a pick-several, not a pick-one. Builder's choice of prefilter method.
+- **Shortlist before asking the model.** A user can have 300+ skills; the owner already does. **Two layers (2026-11-21):**
+1. A tiny embedding model (`all-minilm`, 45 MB, through Ollama's `/api/embed`) picks the **8** skills closest to the task.
+2. The decision model (**kev 4B**) answers one yes/no question per skill on those 8.
+
+If the embedding model is missing, the keyword prefilter is the fallback. Each shortlisted skill gets its own yes/no question, because a `choice` allows only 2–26 options and skills are a pick-several, not a pick-one.
 
 ### 7.6 Engine catalog
 
@@ -244,6 +250,8 @@ A data file per installed CLI, refreshed by `doctor`. For each CLI it records:
 - its safe auto-approve flags.
 
 Model lists go stale; for example, Gemini CLI's built-in default model is already out of date. So `doctor` checks each model with a tiny call before marking it usable.
+
+**Flags by task (owner's request, 2026-11-21): a rules table per CLI, never the model.** The signals pick the flags. For example: `writes_files` → `--sandbox workspace-write`; a read-only task → `--sandbox read-only`; a `risk_area` other than none → the strongest model and high effort. `doctor` reads each CLI's `--help` only to check that every flag in the table still exists. A model never picks flags, so it can never choose unsafe ones such as `--yolo` or "skip permissions".
 
 Known recipes from the owner's setup, all to be verified by the builder:
 - `gemini -m <model> -p "<task>" -y --output-format json`
@@ -364,6 +372,7 @@ Known recipes from the owner's setup, all to be verified by the builder:
    - Normal case: CodeRabbit CLI reviews the finished task.
    - A warning sign: a reviewer inspects that point. Reviewers read only; they do not edit.
    - Ship step 2 (§7.9): Copilot `gpt-5-mini` does the security review.
+   - Size: in team mode, the captain asks Claude Code's built-in Explore agent for the list of files the task touches, and counts them (§7.3). It reads the list, not the code.
 7. **Route fixes.** Send the reviewer's findings back to the worker who wrote the code. Then the reviewer re-checks only the fix.
 8. **Make the important calls:**
    - When the two reviewers disagree, the captain decides.
@@ -432,6 +441,12 @@ Known recipes from the owner's setup, all to be verified by the builder:
 **Decided by the owner on 2026-11-21**
 - **The lead is the team captain** in team mode (§7.13). It plans, assigns, guides with ideas, reads reports, routes reviews and fixes, and makes the important calls. It never writes code, never reviews diffs, and never resolves merge conflicts.
 - **Reviewer team: CodeRabbit CLI and Copilot** (§7.13). Reviewers find problems; the worker that wrote the code fixes them.
+- **Solo or team from the user's phrase**, not from the model (§7.3).
+- **Skill picking:** an embedding filter (top 8), then kev 4B yes/no; a small skill index is kept (§7.5).
+- **Default decision model: `kev:4b-q4_K_M`** (2.7 GB, Apache-2.0, 100 % GPU on the owner's 8 GB card). This follows `docs/phase0-results.md`. `nimble-v3` was more accurate, but it is non-commercial and too slow on this laptop.
+- **Team-task size = the number of files involved.** In team mode, the captain asks Claude Code's built-in **Explore** agent for the file list, and it reads that list only. No separate "confirm" step.
+- **CodeRabbit CLI is installed (0.9.6).** It runs in `--agent` mode, which gives structured findings for agents.
+- **CLI flags come from a rules table per CLI** (§7.6), never from the model.
 - **Workers keep running on the CLI subscriptions** (Phase 2 CLI dispatch stays). Claude Code's own subagents routed to API-key providers were considered and not chosen: they would make crewcast smaller, but they need paid API keys, and they cannot use the Codex, Gemini, Copilot or Kiro subscriptions.
 
 **Still open (default applies unless the owner changes it)**
