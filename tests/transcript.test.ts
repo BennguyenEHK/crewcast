@@ -17,13 +17,13 @@ test('solo fixture: skills extracted in order, mode solo', async () => {
   assert.equal(s.skipped, 0);
 });
 
-test('segments: one entry per real prompt, each with only its own tools; short prompts dropped', async () => {
+test('segments: short replies and continuation summaries do not start or end a task', async () => {
   const s = await new TranscriptReader().segments(fixture('multi-prompt.jsonl'));
   assert.equal(s.skipped, 0);
   assert.deepEqual(s.prompts, [
     {
       task: 'Refactor the payment retry queue to use exponential backoff',
-      actual: { mode: 'team', skills: ['alpha'], engines: ['claude'] },
+      actual: { mode: 'team', skills: ['alpha', 'delta', 'gamma'], engines: ['claude'] },
     },
     {
       task: 'Write a regression test for the duplicate invoice bug in billing',

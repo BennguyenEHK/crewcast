@@ -73,7 +73,20 @@ test('draft emits every real prompt of a file in order and stops at limit across
     const rows = (await readFile(out, 'utf8')).trim().split('\n').map(l => JSON.parse(l));
     assert.deepEqual(rows.map(r => r.id), ['multi-prompt#1', 'multi-prompt#2', 'webfetch-only#1', 'team#1']);
     assert.equal(rows[0].task, 'Refactor the payment retry queue to use exponential backoff');
-    assert.deepEqual(rows[0].actual, { mode: 'team', skills: ['alpha'], engines: ['claude'] });
+    assert.deepEqual(rows[0].actual, { mode: 'team', skills: ['alpha', 'delta', 'gamma'], engines: ['claude'] });
+  });
+});
+
+test('draft skips a session it cannot read and drafts the rest', async () => {
+  await withTemp(async dir => {
+    const projects = await seedProjects(dir);
+    await mkdir(join(projects, 'D--dev-demo', 'broken.jsonl')); // a directory cannot be read as a transcript
+    const out = join(dir, 'tasks.jsonl');
+    const { written, unreadable } = await new Evaluator({ cwd: dir }).draft(projects, out);
+    assert.equal(written, 3);
+    assert.equal(unreadable, 1);
+    const rows = (await readFile(out, 'utf8')).trim().split('\n').map(l => JSON.parse(l));
+    assert.deepEqual(rows.map(r => r.id), ['webfetch-only#1', 'team#1', 'solo#1']);
   });
 });
 

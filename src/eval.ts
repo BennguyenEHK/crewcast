@@ -7,7 +7,7 @@ import type { Skill } from './catalog/skills.js';
 import { Decider } from './decide/decide.js';
 import { Agreement, type Report } from './agreement.js';
 import { ShadowLog, type Actual } from './shadow.js';
-import { TranscriptReader } from './transcript.js';
+import { TranscriptReader, type PromptSegment } from './transcript.js';
 
 export interface EvalTask { id: string; task: string; actual: Actual }
 
@@ -16,17 +16,24 @@ const run = promisify(execFile);
 export class Evaluator {
   constructor(private readonly deps: { cwd: string }) {}
 
-  async draft(projectsDir: string, outFile: string, limit = 80, force = false): Promise<{ written: number }> {
+  async draft(projectsDir: string, outFile: string, limit = 80, force = false): Promise<{ written: number; unreadable: number }> {
     const out = resolve(outFile);
     const top = await this.repoRoot();
     if (top && Evaluator.isInside(top, out)) throw new Error(`refusing to write eval tasks inside the git repo at ${top}`);
 
     const rows: EvalTask[] = [];
     const reader = new TranscriptReader();
+    let unreadable = 0;
     for (const file of await this.transcripts(projectsDir)) {
       if (rows.length >= limit) break;
       const base = basename(file, '.jsonl');
-      const { prompts } = await reader.segments(file);
+      let prompts: PromptSegment[];
+      try {
+        ({ prompts } = await reader.segments(file));
+      } catch {
+        unreadable++; // one locked or unreadable session must not abort the whole draft
+        continue;
+      }
       for (const [i, p] of prompts.entries()) {
         if (rows.length >= limit) break;
         rows.push({ id: `${base}#${i + 1}`, task: p.task, actual: p.actual });
@@ -40,7 +47,7 @@ export class Evaluator {
       if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`${out} exists — pass --force to overwrite`);
       throw err;
     }
-    return { written: rows.length };
+    return { written: rows.length, unreadable };
   }
 
   async run(tasksFile: string, deps: { ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; skills: Skill[]; model: string }): Promise<Report> {

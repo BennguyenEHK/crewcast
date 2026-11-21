@@ -13,7 +13,7 @@ const ENGINE_CMD = /^\s*(codex|gemini|copilot|kiro-cli|claude\s+-p)(\s|$)/;
 const MIN_TASK_WORDS = 8;
 
 type Block = { type?: string; name?: string; input?: Record<string, unknown> & { run_in_background?: unknown } };
-type Line = { type?: string; isMeta?: boolean; isSidechain?: boolean; cwd?: unknown; message?: { content?: unknown } };
+type Line = { type?: string; isMeta?: boolean; isSidechain?: boolean; isCompactSummary?: boolean; cwd?: unknown; message?: { content?: unknown } };
 type Acc = { skills: string[]; engines: Set<string>; team: boolean };
 
 const newAcc = (): Acc => ({ skills: [], engines: new Set(), team: false });
@@ -33,23 +33,21 @@ export class TranscriptReader {
     return { firstPrompt, cwd, skipped: counter.skipped, actual: TranscriptReader.actual(acc) };
   }
 
-  // One entry per real prompt; tool_use blocks count only until the next real prompt, whatever its length.
+  // One entry per task prompt; tool_use blocks count until the next task prompt. A short reply
+  // ("yes go ahead") does not start a task, so the work it triggers is credited to the current one.
   async segments(file: string): Promise<TranscriptSegments> {
     const counter = { skipped: 0 };
     const turns: { task: string; acc: Acc }[] = [];
-    let acc = newAcc(); // tool_use before the first prompt belongs to no prompt
+    let acc = newAcc(); // tool_use before the first task prompt belongs to no task
     for await (const row of TranscriptReader.rows(file, counter)) {
       const task = TranscriptReader.userPrompt(row);
-      if (task !== null) {
+      if (task !== null && task.split(/\s+/).length >= MIN_TASK_WORDS) {
         acc = newAcc();
         turns.push({ task, acc });
       }
       TranscriptReader.fold(acc, row);
     }
-    const prompts = turns
-      .filter(t => t.task.split(/\s+/).length >= MIN_TASK_WORDS)
-      .map(t => ({ task: t.task, actual: TranscriptReader.actual(t.acc) }));
-    return { prompts, skipped: counter.skipped };
+    return { prompts: turns.map(t => ({ task: t.task, actual: TranscriptReader.actual(t.acc) })), skipped: counter.skipped };
   }
 
   // Streams the file line by line; corrupt lines and rows of other types are skipped and counted.
@@ -88,7 +86,7 @@ export class TranscriptReader {
   }
 
   private static userPrompt(row: Line): string | null {
-    if (row.type !== 'user' || row.isMeta || row.isSidechain) return null;
+    if (row.type !== 'user' || row.isMeta || row.isSidechain || row.isCompactSummary) return null;
     return TranscriptReader.prompt(row.message?.content);
   }
 
@@ -113,7 +111,8 @@ export class TranscriptReader {
     return { mode: acc.team ? 'team' : 'solo', skills: acc.skills, engines: [...new Set([...acc.engines, 'claude'])] };
   }
 
-  // A real user prompt is text; wrappers such as <command-name> start with '<' and are not prompts.
+  // A real user prompt is text; wrappers such as <command-name> start with '<', and a context-compaction
+  // summary is not something the owner typed. Neither starts or ends a task.
   private static prompt(content: unknown): string | null {
     const text = typeof content === 'string'
       ? content
@@ -121,7 +120,7 @@ export class TranscriptReader {
         ? content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n')
         : '';
     const trimmed = text.trim();
-    if (!trimmed || trimmed.startsWith('<')) return null;
+    if (!trimmed || trimmed.startsWith('<') || trimmed.startsWith('This session is being continued')) return null;
     return trimmed.slice(0, 2000);
   }
 }
