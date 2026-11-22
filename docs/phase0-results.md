@@ -119,6 +119,24 @@ The "say no if loosely related" framing cuts over-picking, which was kev's main 
 
 **Outcome: go.** Mode and speed pass clearly. Skills reaches 0.795 on a 136-skill synthetic challenge — within noise of the 0.80 bar, and the record is a shadow-mode suggestion, so a wrong pick is harmless. Phase 1 proceeds with the decider as specified, not the keyword-only fallback.
 
+## Does the decision model earn its place? (2026-11-22)
+
+A model-free alternative was tested: skip kev, pick skills by mxbai cosine with a threshold.
+
+Overall (146-set): embedding-only (cosine ≥ 0.55, cap 3) scores **0.822**, above kev's **0.795**, and it correctly picks nothing on no-skill tasks. So on the common case, the decision model is not needed.
+
+Then 15 tasks that each genuinely need 2–3 skills (several hard pairs: near-siblings, or two different families):
+
+| approach | multi-skill (15) | overall (146) |
+|---|---|---|
+| embedding-only (mxbai, cosine ≥ 0.55, cap 3) | 0.40 | 0.822 |
+| kev (per-skill yes/no) | 0.53 | 0.795 |
+
+- **kev's only real advantage is multi-skill (0.53 vs 0.40).** Its per-skill yes/no can include a relevant skill that ranks low; re-ranking cannot.
+- **Both are weak on multi-skill.** Getting two specific skills, with at most two extras, is hard for either.
+- **Pattern:** embedding-only does well when the two needed skills are siblings (both rank high together) and badly when they are from different families (the second ranks low). kev is steadier across both.
+- **Open decision:** keep kev for the multi-skill edge (extra 2.7 GB model), or drop it for embedding-only (simpler, smaller, higher common-case score; multi-skill drops from 0.53 to 0.40 on a rare case). Shadow mode makes a multi-skill miss a harmless suggestion.
+
 ## Bugs found and fixed during the run
 - Ollama's context-size answer is HTTP 500. It is now `too_large` (`fix(backend)`, 5a4f5cd).
 - `eval draft` took one prompt per session. It now takes every real prompt of 8 words or more. A short reply stays with its task, and continuation summaries are skipped (`feat(eval)` / `fix(eval)`).
