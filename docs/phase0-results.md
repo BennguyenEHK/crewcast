@@ -27,11 +27,25 @@ Notes:
 - **Long tasks overflow small input limits.** The real Ollama answers HTTP 500 "Context size has been exceeded" (not the 400 the plan assumed). crewcast now maps it to `too_large`, so those tasks get an all-uncertain record and the run continues. With an 8K setting, nimble-v3 overflowed more often. That explains why its accuracy dropped while its speed improved.
 - strands-decider was not tested. It runs only on Apple-silicon Macs (MLX).
 
+## Results — new path (provisional v2, 2026-11-21)
+
+After the Phase 0 changes (mode from the user's phrase not the model; an all-minilm embedding shortlist of 8 skills; kev the default), the two licence-safe candidates were rerun against the **same uncorrected labels**, 60 s per-request timeout, on the owner's full installed skill set.
+
+| Model | Mode | Skills | p50 | p95 | Licence |
+|---|---|---|---|---|---|
+| kev:4b-q4_K_M | 0.60 | 0.77 | 1.02 s | 1.85 s | Apache 2.0 |
+| tev1:latest | 0.60 | 0.78 | 1.18 s | 1.62 s | not stated |
+
+- **Speed collapsed toward the target.** The 8-skill shortlist (was 20) roughly halved p95: kev 3.3 s → 1.85 s, tev1 3.1 s → 1.62 s. Both are now within a whisker of the 1.5 s target.
+- **Mode is model-independent now.** 0.60 is the phrase rule against the drafted labels, not a model score — both models are identical. Once the corrected labels mark team ⇔ "the task carries a team phrase", mode agreement should approach 1.0. nimble-v3's old mode edge (43 %) is therefore moot: it buys nothing the phrase rule doesn't, at 6× the latency and a non-commercial licence. It was not rerun.
+- **The verdict now hinges on skills and speed.** Skills sit at 0.77–0.78 against uncorrected labels, just under the 0.80 bar; the corrected labels decide whether it clears. tev1 edges kev on both skills and speed here.
+- Still provisional: the labels are uncorrected.
+
 ## Bugs found and fixed during the run
 - Ollama's context-size answer is HTTP 500. It is now `too_large` (`fix(backend)`, 5a4f5cd).
 - `eval draft` took one prompt per session. It now takes every real prompt of 8 words or more. A short reply stays with its task, and continuation summaries are skipped (`feat(eval)` / `fix(eval)`).
 
 ## Next steps
 1. **The owner corrects the labels** in `~/.crewcast/eval/review.csv`. Then rerun all models for the real verdict.
-2. **Ask fewer skill questions:** a shortlist of 8, not 20, with shorter descriptions. This makes the request shorter (less overflow) and faster. Then rerun nimble-v3, tev1 and kev.
+2. ~~**Ask fewer skill questions:** a shortlist of 8, not 20.~~ Done (embedding shortlist, k=8) — see "Results — new path" above. p95 roughly halved.
 3. **Choose the default by accuracy and licence.** nimble-v3 is the most accurate here, but it is for non-commercial use only. So it cannot be crewcast's public default. tev1 and kev are the licence-safe candidates.
