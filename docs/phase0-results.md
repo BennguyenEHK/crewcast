@@ -76,6 +76,23 @@ Embedding shortlist recall (all-minilm — how often every target skill reaches 
 
 **Go/no-go verdict:** mode and speed PASS; skills FAIL at 0.73 (kev, the best licence-safe model). Per §9 a skills fail means phase 1 ships skill-picking by description matching — unless the cheap levers above clear 0.80 first.
 
+## Embedding comparison (2026-11-21)
+
+Three local embedding models, scored by how often the right skill reaches the top 8 (recall), with each model's correct query/document prefix.
+
+| embedding | r@6 | r@8 | r@10 | r@12 |
+|---|---|---|---|---|
+| all-minilm:latest (current) | 0.859 | 0.887 | 0.915 | 0.923 |
+| nomic-embed-text:latest | 0.859 | 0.887 | 0.894 | 0.901 |
+| **mxbai-embed-large:latest** | 0.887 | **0.908** | 0.930 | 0.930 |
+
+kev with the mxbai shortlist: **skills 0.747** (was 0.73 with all-minilm), mode 1.00, p95 1.03 s.
+
+- **mxbai is the best embedding** and is Apache-2.0. nomic did not beat all-minilm even with prefixes.
+- **The embedding is a small lever.** Best recall rose 2 points; kev's skills rose from 0.73 to 0.747.
+- **kev's judgment is the real limit.** The right skill is in the top 8 for 91 % of tasks, yet kev reaches only 0.747. It refuses or mis-picks skills it was shown. Lifting past 0.80 needs a better decision model or a better yes/no question, not a better embedding.
+- Recommendation: adopt mxbai (free, strictly better), and ship kev at ~0.75 in shadow mode.
+
 ## Bugs found and fixed during the run
 - Ollama's context-size answer is HTTP 500. It is now `too_large` (`fix(backend)`, 5a4f5cd).
 - `eval draft` took one prompt per session. It now takes every real prompt of 8 words or more. A short reply stays with its task, and continuation summaries are skipped (`feat(eval)` / `fix(eval)`).
