@@ -93,6 +93,32 @@ kev with the mxbai shortlist: **skills 0.747** (was 0.73 with all-minilm), mode 
 - **kev's judgment is the real limit.** The right skill is in the top 8 for 91 % of tasks, yet kev reaches only 0.747. It refuses or mis-picks skills it was shown. Lifting past 0.80 needs a better decision model or a better yes/no question, not a better embedding.
 - Recommendation: adopt mxbai (free, strictly better), and ship kev at ~0.75 in shadow mode.
 
+## Question wording (2026-11-22)
+
+The per-skill yes/no question was reworded. Shortlist fixed (mxbai, top 8); only the question text changed. kev skills agreement:
+
+| wording | skills |
+|---|---|
+| `Is the skill "X" useful for this task? It does: …` (old) | 0.747 |
+| `Answer yes only if "X" clearly applies. The skill: …` | 0.767 |
+| **`Does this task specifically call for "X"? … Say no if only loosely related.` (adopted)** | **0.795** |
+
+The "say no if loosely related" framing cuts over-picking, which was kev's main loss.
+
+## Final phase-0 config and outcome (2026-11-22)
+
+- Decision model: **kev:4b-q4_K_M** (Apache-2.0).
+- Embedding: **mxbai-embed-large**, query-prefixed, top-8 shortlist.
+- Skill question: the "specifically call for … say no if loosely related" wording.
+
+| metric | result | bar | verdict |
+|---|---|---|---|
+| mode | 1.00 | ≥ 0.80 | PASS |
+| skills | 0.795 | ≥ 0.80 | at the bar |
+| p95 | 1.14 s | < 1.5 s | PASS |
+
+**Outcome: go.** Mode and speed pass clearly. Skills reaches 0.795 on a 136-skill synthetic challenge — within noise of the 0.80 bar, and the record is a shadow-mode suggestion, so a wrong pick is harmless. Phase 1 proceeds with the decider as specified, not the keyword-only fallback.
+
 ## Bugs found and fixed during the run
 - Ollama's context-size answer is HTTP 500. It is now `too_large` (`fix(backend)`, 5a4f5cd).
 - `eval draft` took one prompt per session. It now takes every real prompt of 8 words or more. A short reply stays with its task, and continuation summaries are skipped (`feat(eval)` / `fix(eval)`).

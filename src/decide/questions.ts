@@ -54,7 +54,7 @@ export class QuestionBuilder {
     skills.forEach((s, i) => {
       questions[`skill_${i}`] = {
         type: 'noul',
-        instructions: `Is the skill "${s.name}" useful for this task? It does: ${s.description}`,
+        instructions: `Does this task specifically call for the "${s.name}" skill? The skill: ${s.description}. Say no if it is only loosely related.`,
       };
     });
     return questions;
