@@ -62,7 +62,17 @@ Embedding shortlist recall (all-minilm — how often every target skill reaches 
 - **Mode and speed pass.** Mode is 1.00 (the phrase rule). p95 is about 1.0 s, under the 1.5 s target, with headroom.
 - **kev beats tev1 on skills, 0.73 vs 0.60.** kev is the licence-safe pick, as §9 decided.
 - **Skills misses the 0.80 bar (0.73).** The loss has two parts. The top-8 shortlist already drops a target 11 % of the time (recall@8 = 0.887), so a perfect decision model caps near 0.89 at k=8. kev loses a further ~0.16 by refusing a skill it was shown, or over-picking.
-- **Cheap levers, no new model:** raise the shortlist to k=12 (ceiling 0.887 → 0.923; ~4 more yes/no questions; p95 stays under target); lower the skill threshold (the score tolerates 2 extra picks); or a stronger embedding model to lift recall.
+- **The cheap levers were tried and do not help (kev):**
+
+  | config | skills | p95 |
+  |---|---|---|
+  | k=8, thr=0.70 (default) | **0.73** | 1.03 s |
+  | k=12, thr=0.70 | 0.74 | 1.38 s |
+  | k=16, thr=0.70 | 0.70 | 1.63 s |
+  | k=12, thr=0.60 | 0.67 | 1.33 s |
+
+  A bigger shortlist barely moves skills and costs latency (k=16 goes over the 1.5 s target and scores worse, because more candidates mean more wrong "yes" picks). A looser threshold is worse, because the score penalises more than two extra picks. **The default (k=8, thr=0.70) is already kev's best config.**
+- **What is left to lift skills past 0.80:** a stronger decision model (kev refuses ~0.16 of skills it is shown), or a stronger embedding model (recall@8 is 0.887). Neither is a free knob.
 
 **Go/no-go verdict:** mode and speed PASS; skills FAIL at 0.73 (kev, the best licence-safe model). Per §9 a skills fail means phase 1 ships skill-picking by description matching — unless the cheap levers above clear 0.80 first.
 
