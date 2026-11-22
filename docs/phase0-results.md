@@ -41,6 +41,31 @@ After the Phase 0 changes (mode from the user's phrase not the model; an all-min
 - **The verdict now hinges on skills and speed.** Skills sit at 0.77–0.78 against uncorrected labels, just under the 0.80 bar; the corrected labels decide whether it clears. tev1 edges kev on both skills and speed here.
 - Still provisional: the labels are uncorrected.
 
+## Results — skill-picking challenge (2026-11-21)
+
+A fresh set of 146 synthetic tasks, written so the correct skills are known by construction, covering **all 136 installed skills** as targets. Mode is set by the phrase rule, so it is correct by design and tests nothing. This set measures skill-picking across the whole catalogue, including the near-neighbour families (17 `llmquant-*`, 15 resume skills, 14 option skills). It replaces the uncorrected 60-task set as the real skills measurement.
+
+| Model | Mode | Skills | p50 | p95 | Licence |
+|---|---|---|---|---|---|
+| **kev:4b-q4_K_M** | 1.00 | **0.73** | 0.78 s | 1.03 s | Apache 2.0 |
+| tev1:latest | 1.00 | 0.60 | 0.87 s | 1.01 s | not stated |
+
+Embedding shortlist recall (all-minilm — how often every target skill reaches the model):
+
+| top-k | recall |
+|---|---|
+| 8 (current) | 0.887 |
+| 12 | 0.923 |
+| 16 | 0.930 |
+| 24 | 0.944 |
+
+- **Mode and speed pass.** Mode is 1.00 (the phrase rule). p95 is about 1.0 s, under the 1.5 s target, with headroom.
+- **kev beats tev1 on skills, 0.73 vs 0.60.** kev is the licence-safe pick, as §9 decided.
+- **Skills misses the 0.80 bar (0.73).** The loss has two parts. The top-8 shortlist already drops a target 11 % of the time (recall@8 = 0.887), so a perfect decision model caps near 0.89 at k=8. kev loses a further ~0.16 by refusing a skill it was shown, or over-picking.
+- **Cheap levers, no new model:** raise the shortlist to k=12 (ceiling 0.887 → 0.923; ~4 more yes/no questions; p95 stays under target); lower the skill threshold (the score tolerates 2 extra picks); or a stronger embedding model to lift recall.
+
+**Go/no-go verdict:** mode and speed PASS; skills FAIL at 0.73 (kev, the best licence-safe model). Per §9 a skills fail means phase 1 ships skill-picking by description matching — unless the cheap levers above clear 0.80 first.
+
 ## Bugs found and fixed during the run
 - Ollama's context-size answer is HTTP 500. It is now `too_large` (`fix(backend)`, 5a4f5cd).
 - `eval draft` took one prompt per session. It now takes every real prompt of 8 words or more. A short reply stays with its task, and continuation summaries are skipped (`feat(eval)` / `fix(eval)`).
