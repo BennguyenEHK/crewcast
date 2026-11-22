@@ -8,12 +8,15 @@ export class SkillIndex {
   private readonly model: string;
   private readonly home: string;
   private readonly fetchFn: typeof fetch;
+  // mxbai-embed-large wants this on the query only; skills (documents) stay unprefixed. Override if the model changes.
+  private readonly queryPrefix: string;
 
-  constructor(opts: { baseUrl: string; model?: string; home: string; fetchFn?: typeof fetch }) {
+  constructor(opts: { baseUrl: string; model?: string; home: string; fetchFn?: typeof fetch; queryPrefix?: string }) {
     this.baseUrl = opts.baseUrl;
-    this.model = opts.model ?? 'all-minilm';
+    this.model = opts.model ?? 'mxbai-embed-large';
     this.home = opts.home;
     this.fetchFn = opts.fetchFn ?? fetch;
+    this.queryPrefix = opts.queryPrefix ?? 'Represent this sentence for searching relevant passages: ';
   }
 
   // On any embed failure (model not pulled, Ollama down, bad response) falls back to the keyword shortlist. Never throws.
@@ -30,7 +33,7 @@ export class SkillIndex {
         const vecs = await this.embed(missing.map(i => `${skills[i].name}: ${skills[i].description}`));
         missing.forEach((i, j) => { next[keys[i]] = vecs[j]; });
       }
-      const [taskVec] = await this.embed([task]);
+      const [taskVec] = await this.embed([this.queryPrefix + task]);
       // The cache holds only current skills' keys, so stale entries are pruned on write. A write failure keeps the result.
       await mkdir(this.home, { recursive: true }).catch(() => {});
       await writeFile(cacheFile, JSON.stringify(next)).catch(() => {});

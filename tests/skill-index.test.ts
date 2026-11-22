@@ -54,7 +54,9 @@ test('unchanged skills are not re-embedded: the second call embeds only the task
     await index.top('deploy the app', skills);
     calls.length = 0; // forget the first call's requests
     await index.top('deploy the app', skills);
-    assert.deepEqual(calls, [['deploy the app']]); // only the task, no skill texts
+    assert.equal(calls.length, 1); // only the task is embedded, no skill texts
+    assert.equal(calls[0].length, 1);
+    assert.match(calls[0][0], /deploy the app$/); // the task, carrying the query prefix
   });
 });
 
@@ -66,7 +68,9 @@ test('a changed mtime re-embeds just that skill', async () => {
     await touch('gardener');
     calls.length = 0;
     await index.top('deploy the app', skills);
-    assert.deepEqual(calls, [['gardener: water the plants'], ['deploy the app']]);
+    assert.deepEqual(calls[0], ['gardener: water the plants']); // only the changed skill re-embedded
+    assert.match(calls[1][0], /deploy the app$/); // then the task (with query prefix)
+    assert.equal(calls.length, 2);
   });
 });
 
