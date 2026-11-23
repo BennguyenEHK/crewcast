@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
+import { cursorTo, clearScreenDown } from 'node:readline';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
@@ -232,11 +233,20 @@ export class Cli {
       return 1;
     }
     const interval = Math.max(200, Number(parsed.values.interval) || 1000);
-    // Two-pane dashboard: clear + repaint in place each tick so the whole frame refreshes live. Ctrl-C stops it.
+    const tty = Boolean(process.stdout.isTTY);
     // NO_COLOR convention: its presence (even empty) disables color; otherwise color only on an interactive terminal.
-    const paint: Paint = process.stdout.isTTY && process.env.NO_COLOR === undefined ? ansiPaint : noPaint;
+    const paint: Paint = tty && process.env.NO_COLOR === undefined ? ansiPaint : noPaint;
+    if (!tty) {
+      // Not a real terminal (piped, captured, or launched via a wrapper like `cmd /c`): an in-place dashboard can't
+      // animate and the clear codes would just pile up, so print one clean frame and stop.
+      this.out(await this.watchFrame(given, paint));
+      return 0;
+    }
+    // Two-pane dashboard: redraw in place each tick via the readline cursor API (reliable clear, no flash, no pile-up). Ctrl-C stops it.
     for (;;) {
-      this.out('\x1b[2J\x1b[H' + (await this.watchFrame(given, paint))); // clear screen + home, then the full frame
+      cursorTo(process.stdout, 0, 0);
+      clearScreenDown(process.stdout);
+      process.stdout.write(await this.watchFrame(given, paint));
       await new Promise(r => setTimeout(r, interval));
     }
   }

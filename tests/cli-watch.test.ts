@@ -81,6 +81,20 @@ test('watchFrame: the feed pane carries the activity, above the lower pane', asy
   }
 });
 
+test('watch in a non-TTY prints one clean frame and exits (no pile-up)', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-notty-'));
+  try {
+    const lines: string[] = [];
+    const code = await new Cli(l => lines.push(l), { env: { CREWCAST_HOME: home }, cwd: home }).run(['watch']);
+    assert.equal(code, 0); // non-TTY: one frame, then return (no infinite in-place loop)
+    const out = lines.join('\n');
+    assert.match(out, /crewcast · live feed/);
+    assert.equal(out.split('crewcast · live feed').length - 1, 1); // exactly one frame, not a pile
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test('watchFrame: empty home shows the two panes with a "no decision yet" prompt', async () => {
   const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-empty-'));
   try {
