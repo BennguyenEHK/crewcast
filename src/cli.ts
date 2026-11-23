@@ -358,15 +358,16 @@ export class Cli {
     const redacted = Mailbox.redact(prompt);
     await activity.append({ kind: 'prompt-received', ts: new Date().toISOString(), task: redacted }); // first, so watch shows the hook fired even if deciding is slow/fails
     try {
-      const { home, cwd } = this.paths();
-      const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
-      const client = new SystemOneClient({ baseUrl, timeoutMs: budget });
-      const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
-      const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
-      const git = await new GitInspector().state(cwd);
-      const index = new SkillIndex({ baseUrl, home: this.crewcastHome(), timeoutMs: budget });
       const work = (async () => {
         try {
+          // Setup (skill scan, git probe) runs inside work so it is bounded by the same deadline and any throw still narrates decide-failed.
+          const { home, cwd } = this.paths();
+          const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+          const client = new SystemOneClient({ baseUrl, timeoutMs: budget });
+          const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
+          const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+          const git = await new GitInspector().state(cwd);
+          const index = new SkillIndex({ baseUrl, home: this.crewcastHome(), timeoutMs: budget });
           const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
           const picked = rec.agents[0]?.skills.join(', ') || 'none';
           const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
@@ -380,7 +381,7 @@ export class Cli {
         }
       })();
       void work.catch(() => {}); // if the deadline wins, work's later self-abort must not become an unhandled rejection
-      // Hard deadline: if decide (embed or kev) is slow, add nothing rather than stall the prompt. The slow calls self-abort at `budget`.
+      // Hard deadline: if setup or decide (embed or kev) is slow, add nothing rather than stall the prompt. The slow calls self-abort at `budget`.
       const deadline = new Promise<string>(r => { const t = setTimeout(() => r(''), budget); (t as { unref?: () => void }).unref?.(); });
       return await Promise.race([work, deadline]);
     } catch {
