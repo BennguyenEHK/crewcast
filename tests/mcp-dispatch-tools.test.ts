@@ -8,7 +8,7 @@ test('dispatch tool allocates+dispatches the plan and returns the run state', as
   const seen: { plan: string; run: string }[] = [];
   const dispatch = async (plan: string, run: string): Promise<RunState> => {
     seen.push({ plan, run });
-    return { run, startedAt: 't', workers: [{ unit: 'A', engine: 'codex', group: 0, cwd: '/wt', worktree: null, files: ['a.ts'], skills: [], pid: 7 }] };
+    return { run, startedAt: 't', workers: [{ unit: 'A', engine: 'codex', group: 0, cwd: '/wt', worktree: null, files: ['a.ts'], skills: [], model: 'default', effort: null, pid: 7 }] };
   };
   const res = await new DispatchTool({ dispatch, newRun: () => 'run-x' }).call({ plan: '## A\nfiles: a.ts\n' });
   assert.ok(!res.isError, res.content[0].text);

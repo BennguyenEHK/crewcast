@@ -5,7 +5,7 @@ import type { PlanAllocation, UnitAllocation } from '../decide/allocate.js';
 import type { Mailbox } from '../mailbox.js';
 import type { Worktree, WorktreeManager } from '../worktree.js';
 
-export interface WorkerRecord { unit: string; engine: string; group: number; cwd: string; worktree: Worktree | null; files: string[]; skills: string[]; pid: number | null; error?: string }
+export interface WorkerRecord { unit: string; engine: string; group: number; cwd: string; worktree: Worktree | null; files: string[]; skills: string[]; model: string; effort: string | null; pid: number | null; error?: string }
 
 const SKILL_CAP = 24_000; // keep the task card + skills within the Windows ~32 KB command-line limit (§ worker arg)
 export interface RunState { run: string; startedAt: string; workers: WorkerRecord[] }
@@ -47,7 +47,7 @@ export class Dispatcher {
       const prompt = await this.card(u, opts.run);
       const args = [...engine.headless.map(a => a.replace('{task}', prompt)), ...u.args];
       const { pid, error } = await this.deps.spawn(engine.bin, args, { cwd, env: this.deps.mcpConfig(opts.run) });
-      workers.push({ unit: u.id, engine: u.engine, group: u.group, cwd, worktree, files: u.files, skills: u.skills, pid, ...(error ? { error } : {}) });
+      workers.push({ unit: u.id, engine: u.engine, group: u.group, cwd, worktree, files: u.files, skills: u.skills, model: u.model, effort: u.effort, pid, ...(error ? { error } : {}) });
     }
     const state: RunState = { run: opts.run, startedAt: new Date((this.deps.now ?? Date.now)()).toISOString(), workers };
     const dir = join(this.deps.runsHome, 'runs', opts.run);
