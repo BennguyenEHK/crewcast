@@ -61,6 +61,15 @@ test('redaction masks key-shaped tokens but leaves prose', async () => {
   assert.equal(Mailbox.redact('a normal sentence about keys and tokens'), 'a normal sentence about keys and tokens');
 });
 
+test('redaction keeps the file paths and SHAs the mailbox exists to carry', async () => {
+  // The captain checks the worker's changed-file list (§7.8); masking paths/SHAs would defeat that.
+  const path = 'src/components/VeryLongDescriptiveComponentName.tsx';
+  const sha = '3f2a9c8e1b4d6f7a0c2e5b8d1a4f7c0e3b6d9a2f';
+  assert.equal(Mailbox.redact(`edited ${path} at ${sha}`), `edited ${path} at ${sha}`);
+  // A padded base64 blob (which a SHA/path never is) is still masked.
+  assert.equal(Mailbox.redact('key dGhpc2lzYXNlY3JldHZhbHVlMTIzNDU2Nzg5MA=='), 'key ***');
+});
+
 test('a run id that escapes the runs dir is rejected', async () => {
   await withHome(async home => {
     const mbx = new Mailbox(home);

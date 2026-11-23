@@ -5,12 +5,14 @@ import { ShadowLog } from './shadow.js';
 export interface Message { ts: string; from: string; text: string }
 export interface MailboxEntry extends Message { seq: number }
 
-// shortcut: pattern-based key redaction, not an entropy scanner; tighten the ≥32 catch if it masks non-secret ids.
+// shortcut: masks provider-prefixed tokens, key=value pairs, and padded base64 blobs. It deliberately does NOT mask
+// bare hex/paths/identifiers (git SHAs, file names) — the mailbox must carry those (§7.8), and a raw unpadded secret
+// is shape-identical to a SHA. Upgrade to an entropy check only if a real unpadded-token leak shows up.
 const REDACT: RegExp[] = [
   /(?:sk|ghp|github_pat|gho|ghu|ghs|ghr|xox[baprs])[-_][A-Za-z0-9_-]{8,}/g,
   /\bBearer\s+[A-Za-z0-9._-]{8,}/gi,
   /\b(?:password|passwd|secret|token|api[_-]?key|apikey|auth)\b\s*[:=]\s*\S+/gi,
-  /\b[A-Za-z0-9+/_-]{32,}={0,2}\b/g,
+  /[A-Za-z0-9+/]{24,}={1,2}/g, // base64 WITH padding; SHAs, paths and identifiers have no '=', so they survive
 ];
 
 // A per-run message log the captain and workers talk over (§7.7). One JSONL file per run; seq is the 1-based line index.
