@@ -20,6 +20,20 @@ test('append then recent returns the last n events in order; missing file is emp
   }
 });
 
+test('append caps the log at the last 500 events, dropping the oldest', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-act-cap-'));
+  try {
+    const log = new ActivityLog(home);
+    for (let i = 0; i < 520; i++) await log.append({ kind: 'prompt-received', ts: `t${i}`, task: `task ${i}` });
+    const all = await log.all();
+    assert.equal(all.length, 500);
+    assert.equal((all[0] as Extract<ActivityEvent, { kind: 'prompt-received' }>).task, 'task 20');   // oldest 20 dropped
+    assert.equal((all[499] as Extract<ActivityEvent, { kind: 'prompt-received' }>).task, 'task 519'); // newest kept
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test('summarizeEvent renders each kind with its key facts', () => {
   const cases: [ActivityEvent, RegExp][] = [
     [{ kind: 'prompt-received', ts: 't', task: 'x' }, /prompt received/i],

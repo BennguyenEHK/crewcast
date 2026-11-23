@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { ShadowLog } from './shadow.js';
 
@@ -9,6 +9,8 @@ export type ActivityEvent =
   | { kind: 'dispatch'; ts: string; run: string; units: { unit: string; engine: string }[] };
 
 // crewcast's self-narration log: one event per action it takes, so `watch` can show the whole pipeline (§7 live feed).
+const MAX_EVENTS = 500; // keep the feed bounded: watch re-reads the whole log each tick, and old narration has no value
+
 export class ActivityLog {
   private readonly file: string;
   constructor(private readonly home: string) {
@@ -20,6 +22,10 @@ export class ActivityLog {
     try {
       await mkdir(this.home, { recursive: true });
       await appendFile(this.file, JSON.stringify(e) + '\n', 'utf8');
+      const rows = await this.all();
+      if (rows.length > MAX_EVENTS) { // trim to the last MAX_EVENTS so the log can't grow unbounded
+        await writeFile(this.file, rows.slice(-MAX_EVENTS).map(r => JSON.stringify(r)).join('\n') + '\n', 'utf8');
+      }
     } catch { /* never throw out of a narration write */ }
   }
 
