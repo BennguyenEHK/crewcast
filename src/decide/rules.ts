@@ -10,7 +10,7 @@ export interface Rules {
 }
 
 export const DEFAULT_RULES: Rules = {
-  thresholds: { choice: 0.6, yes: 0.7, no: 0.3, skill: 0.7 },
+  thresholds: { choice: 0.6, yes: 0.7, no: 0.3, skill: 0.55 },
   leadEngine: 'claude',
   review: { engine: 'copilot', model: 'gpt-5-mini', skill: 'security-review' },
   teamPhrases: ['use team agents', 'team agents', 'teamagents', 'use teamagents', 'use a team', 'parallel agents', 'use subagents'],

@@ -29,8 +29,9 @@ import { parsePlan } from './plan.js';
 import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
 import { resolveLauncher } from './dispatch/launcher.js';
-import { RunWatch } from './dispatch/run-watch.js';
-import { renderWatch } from './dispatch/watch-render.js';
+import { RunWatch, type WatchView } from './dispatch/run-watch.js';
+import { appendLines, ansiPaint, noPaint, type FeedCursor, type Paint } from './dispatch/watch-render.js';
+import { ActivityLog } from './activity.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
 import { RunStatusTool } from './mcp/run-status-tool.js';
@@ -122,10 +123,14 @@ const USAGE = [
   // `mcp` and `hook` are internal — a client (Claude Code / a worker) runs them, never a person — so they are not listed.
 ];
 
+// How many embedding-shortlisted skills the model is asked to rate per decision (§7.8). The catalog is large, so a tight
+// window drops genuinely-relevant skills before the model ever sees them; 12 is wide enough to include them without flooding.
+const SHORTLIST_K = 12;
+
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; alive: (pid: number) => boolean; hookTimeoutMs: number }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; spawn: (bin: string, args: string[], opts: { cwd: string; env: Record<string, string> }) => Promise<{ pid: number | null; error?: string }>; alive: (pid: number) => boolean; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -222,26 +227,38 @@ export class Cli {
       return 1;
     }
     const given = parsed.positionals[0];
-    const run = given ?? (await this.latestRun());
-    if (!run) {
-      this.out('no runs yet — start a team task, approve its plan, then watch');
-      return 0;
-    }
     if (given && !(await stat(join(this.crewcastHome(), 'runs', given, 'run.json')).then(() => true, () => false))) {
       this.out(`run not found: ${given}`);
       return 1;
     }
     const interval = Math.max(200, Number(parsed.values.interval) || 1000);
+    // Append-only (scrollable): print each new event and worker-status change as it happens, never clearing the screen,
+    // so the terminal keeps the whole history. No early exit on no-runs — the feed is live. Ctrl-C stops it.
+    // NO_COLOR convention: its presence (even empty) disables color; otherwise color only on an interactive terminal.
+    const paint: Paint = process.stdout.isTTY && process.env.NO_COLOR === undefined ? ansiPaint : noPaint;
+    const state: { run?: string; cursor: FeedCursor; greeted: boolean } = { run: given, cursor: { events: 0, workers: {} }, greeted: false };
     for (;;) {
-      this.out('\x1b[2J\x1b[H' + (await this.watchOnce(run))); // clear screen + home, then the frame
+      for (const line of await this.watchTick(given, state, paint)) this.out(line);
       await new Promise(r => setTimeout(r, interval));
     }
   }
 
-  private async watchOnce(run: string): Promise<string> {
+  // One watch tick, extracted so the loop glue is testable: resolve the run, read the activity log + run view, and return
+  // only the lines to print this tick — new events, a fresh agents block on any worker change, or the "nothing yet" greeting.
+  private async watchTick(given: string | undefined, state: { run?: string; cursor: FeedCursor; greeted: boolean }, paint: Paint): Promise<string[]> {
     const crewHome = this.crewcastHome();
-    const watch = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
-    return renderWatch(await watch.view(run));
+    if (!given && !state.run) state.run = await this.latestRun(); // pick up the first run once it appears
+    const events = await new ActivityLog(crewHome).all();
+    let view: WatchView | null = null;
+    if (state.run) {
+      const watcher = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
+      try { view = await watcher.view(state.run); } catch { /* run.json missing/mid-write: skip the worker block this tick */ }
+    }
+    const { lines, cursor } = appendLines(events, view, state.cursor, new Date().toISOString().slice(11, 19), paint);
+    state.cursor = cursor;
+    if (lines.length) return lines;
+    if (!state.greeted && cursor.events === 0 && !state.run) { state.greeted = true; return ['nothing yet — enter a prompt in Claude Code']; }
+    return [];
   }
 
   // The most recently started run under <crewHome>/runs, by run.json mtime. undefined if there are none.
@@ -277,7 +294,19 @@ export class Cli {
       installHook,
     }).run();
     for (const s of res.steps) this.out(`✓ ${s}`);
+    await this.warmSkillIndex(baseUrl); // so the 2 s hook isn't stuck on a cold full-catalog embed it can't finish in budget
     return 0;
+  }
+
+  // Pre-embed the skill catalog into the SkillIndex cache. Best-effort: the hook still falls back to keyword ranking
+  // until warm, and a single later skill edit is a cheap (one-skill) cache miss the hook handles within budget.
+  private async warmSkillIndex(baseUrl: string): Promise<void> {
+    try {
+      const { home, cwd } = this.paths();
+      const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+      await new SkillIndex({ baseUrl, home: this.crewcastHome() }).warm(skills);
+      this.out(`✓ skill index warmed (${skills.length} skills)`);
+    } catch { /* warming is best-effort; never fail setup/update over it */ }
   }
 
   private async doctor(): Promise<number> {
@@ -308,6 +337,7 @@ export class Cli {
       this.out(await run('git', ['-C', root, 'pull']));
       this.out('npm run build…');
       await run('npm', ['--prefix', root, 'run', 'build']);
+      await this.warmSkillIndex(new Config(this.deps.env).ollamaBaseUrl); // re-warm in case a DOC_VERSION bump invalidated the cache
       this.out('crewcast updated — restart Claude Code to pick up any changes');
       return 0;
     } catch (err) {
@@ -349,24 +379,38 @@ export class Cli {
     }
     if (!prompt.trim() || prompt.trim().split(/\s+/).length < 8) return '';
     const budget = this.deps.hookTimeoutMs ?? 2000; // §11: the hook never adds more than ~2 s to the prompt
+    const activity = new ActivityLog(this.crewcastHome());
+    const redacted = Mailbox.redact(prompt);
+    // prompt-received means a human pressed enter. Crewcast-orchestrated prompts (dispatched workers / captain runs
+    // carry CREWCAST_RUN) are crewcast driving itself, so skip prompt-received for them — the decision is still narrated.
+    if (!(this.deps.env ?? process.env).CREWCAST_RUN) {
+      await activity.append({ kind: 'prompt-received', ts: new Date().toISOString(), task: redacted }); // first, so watch shows the hook fired even if deciding is slow/fails
+    }
     try {
-      const { home, cwd } = this.paths();
-      const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
-      const client = new SystemOneClient({ baseUrl, timeoutMs: budget });
-      const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
-      const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
-      const git = await new GitInspector().state(cwd);
-      const index = new SkillIndex({ baseUrl, home: this.crewcastHome(), timeoutMs: budget });
       const work = (async () => {
-        const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
-        const picked = rec.agents[0]?.skills.join(', ') || 'none';
-        const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
-        let block = `crewcast (shadow): mode=${rec.mode}; skills: ${picked}; branch: ${branch}.`;
-        if (rec.mode === 'team') block += ' You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill §7.13).';
-        return JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } });
+        try {
+          // Setup (skill scan, git probe) runs inside work so it is bounded by the same deadline and any throw still narrates decide-failed.
+          const { home, cwd } = this.paths();
+          const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+          const client = new SystemOneClient({ baseUrl, timeoutMs: budget });
+          const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
+          const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+          const git = await new GitInspector().state(cwd);
+          const index = new SkillIndex({ baseUrl, home: this.crewcastHome(), timeoutMs: budget });
+          const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s, SHORTLIST_K) }).decide(prompt);
+          const picked = rec.agents[0]?.skills.join(', ') || 'none';
+          const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
+          await activity.append({ kind: 'decided', ts: new Date().toISOString(), mode: rec.mode, skills: rec.agents[0]?.skills ?? [], branch, task: redacted });
+          let block = `crewcast (shadow): mode=${rec.mode}; skills: ${picked}; branch: ${branch}.`;
+          if (rec.mode === 'team') block += ' You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill §7.13).';
+          return JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } });
+        } catch (err) {
+          await activity.append({ kind: 'decide-failed', ts: new Date().toISOString(), reason: err instanceof Error ? err.message : 'decide failed' });
+          throw err; // stay fail-open: the race/outer catch still returns '' so the prompt is untouched
+        }
       })();
       void work.catch(() => {}); // if the deadline wins, work's later self-abort must not become an unhandled rejection
-      // Hard deadline: if decide (embed or kev) is slow, add nothing rather than stall the prompt. The slow calls self-abort at `budget`.
+      // Hard deadline: if setup or decide (embed or kev) is slow, add nothing rather than stall the prompt. The slow calls self-abort at `budget`.
       const deadline = new Promise<string>(r => { const t = setTimeout(() => r(''), budget); (t as { unref?: () => void }).unref?.(); });
       return await Promise.race([work, deadline]);
     } catch {
@@ -442,7 +486,7 @@ export class Cli {
       worktrees: new WorktreeManager({ repoRoot: cwd }),
       mailbox,
       runsHome: crewHome,
-      spawn: async (bin, args, opts) => {
+      spawn: this.deps.spawn ?? (async (bin, args, opts) => {
         // Resolve a Windows npm .cmd/.ps1 shim to `node <cli.js>` so shell:false can launch it (the untrusted prompt never hits a shell, §3).
         const { cmd, prefixArgs } = await resolveLauncher(bin);
         return new Promise(resolve => {
@@ -455,7 +499,7 @@ export class Cli {
             resolve({ pid: child.pid ?? null });
           });
         });
-      },
+      }),
       skillText,
       mcpConfig: run => ({ CREWCAST_RUN: run }),
     });
@@ -466,7 +510,9 @@ export class Cli {
       if (engines.every(e => e.installed === undefined)) engines = await new EngineCatalog({ run: this.deps.run }).detect();
       const pickSkills = this.deps.pickSkills ?? (async (text: string) => (await index.top(text, skills, 3)).map(s => s.name));
       const alloc = await new PlanAllocator({ engines, leadEngine: 'claude', pickSkills }).allocate(parsePlan(markdown));
-      return dispatcher.dispatch(alloc, { run, repoRoot: cwd, engines });
+      const state = await dispatcher.dispatch(alloc, { run, repoRoot: cwd, engines });
+      await new ActivityLog(crewHome).append({ kind: 'dispatch', ts: new Date().toISOString(), run: state.run, units: state.workers.map(w => ({ unit: w.unit, engine: w.engine })) });
+      return state;
     };
     return { dispatch, status: run => dispatcher.status(run) };
   }
@@ -522,7 +568,7 @@ export class Cli {
 
     let rec;
     try {
-      rec = await new Decider({ ask, skills, git, model, shortlist: (t, s) => index.top(t, s) }).decide(task);
+      rec = await new Decider({ ask, skills, git, model, shortlist: (t, s) => index.top(t, s, SHORTLIST_K) }).decide(task);
     } catch (err) {
       if (!(err instanceof BackendError)) throw err;
       this.backendLine(err, baseUrl, model);
@@ -610,7 +656,7 @@ export class Cli {
 
     let report: Report;
     try {
-      report = await new Evaluator({ cwd }).run(file, { ask, skills, model, shortlist: (t, s) => index.top(t, s) });
+      report = await new Evaluator({ cwd }).run(file, { ask, skills, model, shortlist: (t, s) => index.top(t, s, SHORTLIST_K) });
     } catch (err) {
       if (err instanceof BackendError) {
         this.backendLine(err, baseUrl, model);

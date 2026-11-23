@@ -4,7 +4,7 @@ import type { Mailbox } from '../mailbox.js';
 import type { RunState } from './dispatcher.js';
 
 export type WatchStatus = 'failed' | 'running' | 'ended' | 'queued';
-export interface WatchRow { unit: string; engine: string; files: string[]; skills: string[]; status: WatchStatus; latest: string; messages: number; error?: string }
+export interface WatchRow { unit: string; engine: string; files: string[]; skills: string[]; model?: string; effort?: string | null; status: WatchStatus; latest: string; messages: number; error?: string }
 export interface WatchView { run: string; startedAt: string; elapsedMs: number; rows: WatchRow[] }
 
 // Derives a live view of a team run from its run.json + mailbox (§7.7): each worker's status, latest message, count, and elapsed.
@@ -23,7 +23,8 @@ export class RunWatch {
         : this.deps.alive(w.pid) ? 'running'
         : 'ended';
       return {
-        unit: w.unit, engine: w.engine, files: w.files, skills: (w as { skills?: string[] }).skills ?? [], // Task 2 adds skills to WorkerRecord; read defensively so this compiles alone
+        unit: w.unit, engine: w.engine, files: w.files, skills: (w as { skills?: string[] }).skills ?? [], // read defensively: older run.json may predate these fields
+        model: (w as { model?: string }).model ?? 'default', effort: (w as { effort?: string | null }).effort ?? null,
         status, latest: mine.at(-1)?.text ?? '', messages: mine.length,
         ...(w.error ? { error: w.error } : {}),
       };

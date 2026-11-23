@@ -80,3 +80,45 @@ test('a slow decide → empty within the hook budget (no long stall)', { timeout
     await rm(root, { recursive: true, force: true });
   }
 });
+
+// --- live feed: the hook narrates its decision to the activity log ---
+import { ActivityLog, type ActivityEvent } from '../src/activity.js';
+
+async function hookHome(ask: (r: SystemOneRequest) => Promise<SystemOneResponse>, prompt: string, extraEnv: Record<string, string> = {}): Promise<ActivityEvent[]> {
+  const root = await mkdtemp(join(tmpdir(), 'cc-hookact-'));
+  try {
+    const home = join(root, 'crewcast');
+    const cwd = join(root, 'proj');
+    await mkdir(cwd, { recursive: true });
+    const cli = new Cli(() => {}, { ask, env: { USERPROFILE: join(root, 'home'), CREWCAST_HOME: home, ...extraEnv }, cwd });
+    await build(cli, JSON.stringify({ prompt }));
+    return await new ActivityLog(home).recent(10);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('hook narrates prompt-received then decided', async () => {
+  const events = await hookHome(okAsk, 'please add google login to the settings page now');
+  assert.deepEqual(events.map(e => e.kind), ['prompt-received', 'decided']);
+  assert.equal((events[1] as Extract<ActivityEvent, { kind: 'decided' }>).mode, 'solo');
+});
+
+test('hook narrates decide-failed when the backend is unreachable (not silence)', async () => {
+  const badAsk = async () => { throw new BackendError('ollama_unreachable', 'cannot reach ollama'); };
+  const events = await hookHome(badAsk, 'please add google login to the settings page now');
+  assert.deepEqual(events.map(e => e.kind), ['prompt-received', 'decide-failed']);
+});
+
+test('an orchestrated prompt (CREWCAST_RUN set) skips prompt-received, keeps decided', async () => {
+  // A dispatched worker / captain run carries CREWCAST_RUN; prompt-received is for a human pressing enter, so it is skipped.
+  const events = await hookHome(okAsk, 'please add google login to the settings page now', { CREWCAST_RUN: 'r1' });
+  assert.deepEqual(events.map(e => e.kind), ['decided']);
+});
+
+test('the prompt text in the activity event is redacted', async () => {
+  const events = await hookHome(okAsk, 'please set api_key=hunter2secretvalue in the config file now');
+  const first = events[0] as Extract<ActivityEvent, { kind: 'prompt-received' }>;
+  assert.ok(first.task.includes('***'), first.task);
+  assert.ok(!first.task.includes('hunter2secretvalue'), first.task);
+});

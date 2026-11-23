@@ -5,6 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Cli } from '../src/cli.js';
 import { Mailbox } from '../src/mailbox.js';
+import { ActivityLog } from '../src/activity.js';
+import { noPaint } from '../src/dispatch/watch-render.js';
 
 async function seedRun(home: string, run: string, startedAt: string) {
   await mkdir(join(home, 'runs', run), { recursive: true });
@@ -18,15 +20,18 @@ async function seedRun(home: string, run: string, startedAt: string) {
   await writeFile(join(home, 'runs', run, 'run.json'), JSON.stringify(state), 'utf8');
 }
 
-type Internals = { watchOnce(run: string): Promise<string>; latestRun(): Promise<string | undefined> };
+type TickState = { run?: string; cursor: { events: number; workers: Record<string, string> }; greeted: boolean };
+type Internals = { watchTick(given: string | undefined, state: TickState, paint: typeof noPaint): Promise<string[]>; latestRun(): Promise<string | undefined> };
+const freshState = (run?: string): TickState => ({ run, cursor: { events: 0, workers: {} }, greeted: false });
+const tick = (cli: Cli, given: string | undefined, state: TickState) => (cli as unknown as Internals).watchTick(given, state, noPaint);
 
-test('watchOnce renders a frame naming the workers', async () => {
+test('watchTick emits an agents block naming the workers and their latest message', async () => {
   const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-'));
   try {
     await seedRun(home, 'r1', new Date().toISOString());
     await new Mailbox(home).post('r1', 'A', 'writing tests');
     const cli = new Cli(() => {}, { env: { CREWCAST_HOME: home }, cwd: home, alive: pid => pid === 100 });
-    const frame = await (cli as unknown as Internals).watchOnce('r1');
+    const frame = (await tick(cli, 'r1', freshState('r1'))).join('\n');
     assert.match(frame, /codex/); assert.match(frame, /agy/);
     assert.match(frame, /writing tests/); // worker A's latest message
   } finally {
@@ -47,13 +52,40 @@ test('watch with an explicit run id that does not exist says so, exit 1 (not a r
   }
 });
 
-test('watch with no runs prints a clear message and exits 0', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch2-'));
+test('watchTick shows the activity feed even with no runs (never "no runs")', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-feed-'));
   try {
-    const lines: string[] = [];
-    const code = await new Cli(l => lines.push(l), { env: { CREWCAST_HOME: home }, cwd: home }).run(['watch']);
-    assert.equal(code, 0);
-    assert.ok(lines.some(l => /no runs/i.test(l)), lines.join('\n'));
+    await new ActivityLog(home).append({ kind: 'decided', ts: '2026-11-22T10:00:00.000Z', mode: 'solo', skills: [], branch: 'keep', task: 'x' });
+    const cli = new Cli(() => {}, { env: { CREWCAST_HOME: home }, cwd: home });
+    const frame = (await tick(cli, undefined, freshState())).join('\n');
+    assert.match(frame, /decided.*solo/);
+    assert.ok(!/no runs/i.test(frame), frame);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('watchTick shows the feed above the agents block when a run resolves', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-both-'));
+  try {
+    await new ActivityLog(home).append({ kind: 'decided', ts: '2026-11-22T10:00:00.000Z', mode: 'team', skills: [], branch: 'feat/x', task: 'x' });
+    await seedRun(home, 'r1', new Date().toISOString());
+    const cli = new Cli(() => {}, { env: { CREWCAST_HOME: home }, cwd: home, alive: pid => pid === 100 });
+    const frame = (await tick(cli, 'r1', freshState('r1'))).join('\n');
+    assert.match(frame, /decided.*team/);                                    // feed line
+    assert.match(frame, /codex/);                                            // agents block
+    assert.ok(frame.indexOf('agents @') > frame.indexOf('decided'), 'the agents block is below the feed line');
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('watchTick with no activity and no run says "nothing yet"', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-empty-'));
+  try {
+    const cli = new Cli(() => {}, { env: { CREWCAST_HOME: home }, cwd: home });
+    const frame = (await tick(cli, undefined, freshState())).join('\n');
+    assert.match(frame, /nothing yet/i);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

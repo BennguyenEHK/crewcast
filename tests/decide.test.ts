@@ -121,6 +121,20 @@ test('skill noul 0.9 picked, 0.5 → skills_uncertain, 0.1 → dropped', async (
   assert.deepEqual(rec.skills_uncertain, ['beta-skill']);
 });
 
+test('a skill the model rates 0.6 is picked (the pick bar is 0.55, not 0.7)', async () => {
+  const { ask } = fakeAsk(baseAnswers({ skill_0: noul(0.6) }));
+  const s = [skill('design-skill', 'ui design')];
+  const rec = await new Decider({ ask, skills: s, git: null, model: 'systemone', shortlist: async () => s }).decide('redesign the settings page');
+  assert.deepEqual(rec.agents[0].skills, ['design-skill']); // 0.6 ≥ 0.55 → picked, not dropped to uncertain
+});
+
+test('skill questions ask whether the skill helps, without the strict "specifically/loosely related" wording', () => {
+  const q = new QuestionBuilder().build([skill('x-skill', 'does x')]);
+  const text = (q.skill_0 as { instructions: string }).instructions;
+  assert.match(text, /help with this task/i);
+  assert.ok(!/specifically|loosely related/i.test(text), text);
+});
+
 test('branch new only on default branch + writes_files + (dirty or team); slug ≤ 40 chars', async () => {
   const decideWith = async (task: string, git: GitState | null, over: Record<string, Answer> = {}) => {
     const { ask } = fakeAsk(baseAnswers(over));

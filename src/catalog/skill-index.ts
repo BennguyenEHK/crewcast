@@ -25,28 +25,55 @@ export class SkillIndex {
   async top(task: string, skills: Skill[], k = 8): Promise<Skill[]> {
     if (skills.length === 0) return [];
     try {
-      const cacheFile = join(this.home, 'skill-index.json');
-      const cache = await SkillIndex.readCache(cacheFile);
-      const keys = await Promise.all(skills.map(async s => `${s.path}:${(await stat(s.path)).mtimeMs}:${this.model}`));
-      const next: Record<string, number[]> = {};
-      for (let i = 0; i < skills.length; i++) if (keys[i] in cache) next[keys[i]] = cache[keys[i]];
-      const missing = skills.map((_, i) => i).filter(i => !(keys[i] in next));
-      if (missing.length) {
-        const vecs = await this.embed(missing.map(i => `${skills[i].name}: ${skills[i].description}`));
-        missing.forEach((i, j) => { next[keys[i]] = vecs[j]; });
-      }
+      const { keys, vecs } = await this.vectors(skills);
       const [taskVec] = await this.embed([this.queryPrefix + task]);
-      // The cache holds only current skills' keys, so stale entries are pruned on write. A write failure keeps the result.
-      await mkdir(this.home, { recursive: true }).catch(() => {});
-      await writeFile(cacheFile, JSON.stringify(next)).catch(() => {});
       return skills
-        .map((s, i) => ({ s, score: SkillIndex.cosine(taskVec, next[keys[i]]) }))
+        .map((s, i) => ({ s, score: SkillIndex.cosine(taskVec, vecs[keys[i]]) }))
         .sort((a, b) => b.score - a.score || a.s.name.localeCompare(b.s.name))
         .slice(0, k)
         .map(x => x.s);
     } catch {
       return new SkillCatalog().shortlist(task, skills, k);
     }
+  }
+
+  // Pre-embed the whole catalog so the cache is warm — the 2 s hook can't afford a cold full-catalog embed and
+  // can't warm itself within budget, so `crewcast setup`/`update` call this once (unbounded). Best-effort, never throws.
+  async warm(skills: Skill[]): Promise<void> {
+    if (skills.length === 0) return;
+    try { await this.vectors(skills); } catch { /* the hook still falls back to keyword ranking until a later run warms it */ }
+  }
+
+  // Cached embedding per skill; embeds (and caches) any whose doc changed. Keyed by path:mtime:model:DOC_VERSION so an
+  // older embed-text recipe (e.g. name+description only) is recomputed once. The cache holds only current keys → stale pruned.
+  private async vectors(skills: Skill[]): Promise<{ keys: string[]; vecs: Record<string, number[]> }> {
+    const cacheFile = join(this.home, 'skill-index.json');
+    const cache = await SkillIndex.readCache(cacheFile);
+    const keys = await Promise.all(skills.map(async s => `${s.path}:${(await stat(s.path)).mtimeMs}:${this.model}:d${SkillIndex.DOC_VERSION}`));
+    const vecs: Record<string, number[]> = {};
+    for (let i = 0; i < skills.length; i++) if (keys[i] in cache) vecs[keys[i]] = cache[keys[i]];
+    const missing = skills.map((_, i) => i).filter(i => !(keys[i] in vecs));
+    if (missing.length) {
+      const embedded = await this.embed(await Promise.all(missing.map(i => this.doc(skills[i]))));
+      missing.forEach((i, j) => { vecs[keys[i]] = embedded[j]; });
+      await mkdir(this.home, { recursive: true }).catch(() => {});
+      await writeFile(cacheFile, JSON.stringify(vecs)).catch(() => {}); // persist so a later cold call reuses what embedded here
+    }
+    return { keys, vecs };
+  }
+
+  private static readonly DOC_VERSION = 2; // bump when the doc() recipe changes, to recompute cached vectors
+  private static readonly BODY_CAP = 1500; // chars of body to embed — well inside mxbai's ~512-token window, more signal than the one-line description
+
+  // The text embedded for a skill: name + description + an excerpt of the SKILL.md body (the real ranking signal —
+  // "when to use", triggers, substance). Falls back to name + description if the body can't be read.
+  private async doc(s: Skill): Promise<string> {
+    let body = '';
+    try {
+      const raw = (await readFile(s.path, 'utf8')).replace(/^﻿/, '');
+      body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').replace(/\s+/g, ' ').trim().slice(0, SkillIndex.BODY_CAP);
+    } catch { /* unreadable body: rank on name + description alone */ }
+    return body ? `${s.name}: ${s.description}\n\n${body}` : `${s.name}: ${s.description}`;
   }
 
   private async embed(inputs: string[]): Promise<number[][]> {
