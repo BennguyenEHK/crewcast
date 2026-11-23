@@ -1,7 +1,10 @@
+import { execFile } from 'node:child_process';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { parseArgs } from 'node:util';
+import { fileURLToPath } from 'node:url';
+import { parseArgs, promisify } from 'node:util';
 import { performance } from 'node:perf_hooks';
 import { BackendError, SystemOneClient, type SystemOneRequest, type SystemOneResponse } from './backend/systemone.js';
 import { SkillCatalog, type Skill } from './catalog/skills.js';
@@ -17,6 +20,62 @@ import { McpServer } from './mcp/server.js';
 import { DecideTool } from './mcp/decide-tool.js';
 import { CatalogTool } from './mcp/catalog-tool.js';
 import { EngineCatalog } from './engines/catalog.js';
+import { Setup } from './install/setup.js';
+import { Doctor } from './install/doctor.js';
+import { Uninstall } from './install/uninstall.js';
+
+const execFileP = promisify(execFile);
+// Trusted bins/args only (catalog constants + 'claude'); shell:true resolves Windows .cmd/.ps1 npm shims. Never for task text.
+async function defaultRun(bin: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileP(bin, args, { shell: true });
+  return stdout;
+}
+
+// Best-effort pre-warm: load the model into memory with keep_alive so the first real call isn't a cold start. A failure just leaves it cold.
+function defaultWarm(baseUrl: string): (model: string) => Promise<void> {
+  return async model => {
+    try {
+      if (/embed/i.test(model)) {
+        await fetch(`${baseUrl}/api/embed`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model, input: 'warm', keep_alive: '30m' }),
+          signal: AbortSignal.timeout(60_000),
+        });
+      } else {
+        await new SystemOneClient({ baseUrl, timeoutMs: 60_000 }).ask({
+          model, state: 'warm', keep_alive: '30m',
+          questions: { ready: { type: 'noul', instructions: 'Reply.' } },
+        });
+      }
+    } catch { /* cold model stays cold; the next real call pays the load */ }
+  };
+}
+
+interface Settings { hooks?: Record<string, { hooks: { type: string; command: string }[] }[]>; [k: string]: unknown }
+async function readSettings(path: string): Promise<Settings> {
+  try { return JSON.parse(await readFile(path, 'utf8')) as Settings; } catch { return {}; }
+}
+// Adds the crewcast UserPromptSubmit hook to ~/.claude/settings.json, idempotently. Returns the path edited (recorded for reversal).
+async function installHook(userHome: string): Promise<string> {
+  const path = join(userHome, '.claude', 'settings.json');
+  await mkdir(dirname(path), { recursive: true });
+  const settings = await readSettings(path);
+  settings.hooks ??= {};
+  const list = (settings.hooks.UserPromptSubmit ??= []);
+  if (!list.some(e => e.hooks?.some(h => h.command === 'crewcast hook'))) {
+    list.push({ hooks: [{ type: 'command', command: 'crewcast hook' }] });
+  }
+  await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+  return path;
+}
+async function removeHook(path: string): Promise<void> {
+  const settings = await readSettings(path);
+  const list = settings.hooks?.UserPromptSubmit;
+  if (!list) return;
+  settings.hooks!.UserPromptSubmit = list.filter(e => !e.hooks?.some(h => h.command === 'crewcast hook'));
+  await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+}
 
 const USAGE = [
   'usage: crewcast <command>',
@@ -27,6 +86,9 @@ const USAGE = [
   '  eval [--model <name>] [file]',
   '  skills',
   '  engines [--json]',
+  '  setup',
+  '  doctor',
+  '  uninstall',
   '  hook',
   '  mcp',
   '  --version',
@@ -35,7 +97,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; hookTimeoutMs: number }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -50,6 +112,9 @@ export class Cli {
     if (argv[0] === 'stats') return this.stats();
     if (argv[0] === 'eval') return argv[1] === 'draft' ? this.evalDraft(argv.slice(2)) : this.evalRun(argv.slice(1));
     if (argv[0] === 'engines') return this.engines(argv.slice(1));
+    if (argv[0] === 'setup') return this.setup();
+    if (argv[0] === 'doctor') return this.doctor();
+    if (argv[0] === 'uninstall') return this.uninstall();
     if (argv[0] === 'hook') return this.hook();
     if (argv[0] === 'mcp') return this.mcp();
     USAGE.forEach(line => this.out(line));
@@ -74,6 +139,52 @@ export class Cli {
     for (const e of engines) {
       this.out(`${e.id} — ${e.installed ? `installed ${e.version ?? '?'}` : 'absent'}, model ${e.models[0]}, parallel ${e.parallelLimit}`);
     }
+    return 0;
+  }
+
+  private async setup(): Promise<number> {
+    const { home: userHome } = this.paths();
+    const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+    const skillSource = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'crewcast');
+    const res = await new Setup({
+      crewHome: this.crewcastHome(),
+      userHome,
+      skillSource,
+      baseUrl,
+      run: this.deps.run ?? defaultRun,
+      copyDir: (from, to) => cp(from, to, { recursive: true }),
+      warm: this.deps.warm ?? defaultWarm(baseUrl),
+      installHook,
+    }).run();
+    for (const s of res.steps) this.out(`✓ ${s}`);
+    return 0;
+  }
+
+  private async doctor(): Promise<number> {
+    const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+    const report = await new Doctor({
+      baseUrl,
+      run: this.deps.run ?? defaultRun,
+      warm: this.deps.warm ?? defaultWarm(baseUrl),
+    }).run();
+    for (const e of report.engines) {
+      if (!e.installed) this.out(`${e.id} — absent`);
+      else if (e.staleFlags.length) this.out(`${e.id} — installed, STALE flags: ${e.staleFlags.join(' ')}`);
+      else this.out(`${e.id} — installed, flags ok`);
+    }
+    this.out(`warmed: ${report.warmed.join(', ')}`);
+    return 0;
+  }
+
+  private async uninstall(): Promise<number> {
+    const res = await new Uninstall({
+      home: this.crewcastHome(),
+      run: this.deps.run ?? defaultRun,
+      remove: path => rm(path, { recursive: true, force: true }),
+      removeHook,
+    }).run();
+    if (res.removed.length === 0) this.out('nothing to uninstall');
+    for (const r of res.removed) this.out(`✓ removed ${r}`);
     return 0;
   }
 
