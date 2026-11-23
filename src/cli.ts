@@ -13,6 +13,9 @@ import { GitInspector } from './git.js';
 import { ShadowLog, type Actual } from './shadow.js';
 import { Agreement, type Report } from './agreement.js';
 import { Evaluator } from './eval.js';
+import { McpServer } from './mcp/server.js';
+import { DecideTool } from './mcp/decide-tool.js';
+import { CatalogTool } from './mcp/catalog-tool.js';
 
 const USAGE = [
   'usage: crewcast <command>',
@@ -22,6 +25,7 @@ const USAGE = [
   '  eval draft [--projects <dir>] [--out <file>] [--limit N] [--force]',
   '  eval [--model <name>] [file]',
   '  skills',
+  '  mcp',
   '  --version',
 ];
 
@@ -42,8 +46,31 @@ export class Cli {
     if (argv[0] === 'label') return this.label(argv.slice(1));
     if (argv[0] === 'stats') return this.stats();
     if (argv[0] === 'eval') return argv[1] === 'draft' ? this.evalDraft(argv.slice(2)) : this.evalRun(argv.slice(1));
+    if (argv[0] === 'mcp') return this.mcp();
     USAGE.forEach(line => this.out(line));
     return 1;
+  }
+
+  private async mcp(): Promise<number> {
+    const server = await this.buildMcpServer();
+    await server.serve(process.stdin, process.stdout);
+    return 0;
+  }
+
+  private async buildMcpServer(): Promise<McpServer> {
+    const { home, cwd } = this.paths();
+    const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+    const client = new SystemOneClient({ baseUrl });
+    const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
+    const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+    const git = await new GitInspector().state(cwd);
+    const crewHome = this.crewcastHome();
+    const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
+    const tools = [
+      new DecideTool({ ask, skills, git, home: crewHome, baseUrl, defaultModel: 'kev:4b-q4_K_M' }),
+      new CatalogTool({ skills }),
+    ];
+    return new McpServer({ tools, serverInfo: { name: 'crewcast', version } });
   }
 
   private paths(): { home: string; cwd: string } {
