@@ -23,6 +23,8 @@ import { PostMessageTool } from './mcp/post-message-tool.js';
 import { ReadMessagesTool } from './mcp/read-messages-tool.js';
 import { Mailbox } from './mailbox.js';
 import { EngineCatalog } from './engines/catalog.js';
+import { parsePlan } from './plan.js';
+import { PlanAllocator } from './decide/allocate.js';
 import { Setup } from './install/setup.js';
 import { Doctor } from './install/doctor.js';
 import { Uninstall } from './install/uninstall.js';
@@ -89,6 +91,7 @@ const USAGE = [
   '  eval [--model <name>] [file]',
   '  skills',
   '  engines [--json]',
+  '  plan <file> [--json]',
   '  setup',
   '  doctor',
   '  uninstall',
@@ -100,7 +103,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; hookTimeoutMs: number }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -115,6 +118,7 @@ export class Cli {
     if (argv[0] === 'stats') return this.stats();
     if (argv[0] === 'eval') return argv[1] === 'draft' ? this.evalDraft(argv.slice(2)) : this.evalRun(argv.slice(1));
     if (argv[0] === 'engines') return this.engines(argv.slice(1));
+    if (argv[0] === 'plan') return this.plan(argv.slice(1));
     if (argv[0] === 'setup') return this.setup();
     if (argv[0] === 'doctor') return this.doctor();
     if (argv[0] === 'uninstall') return this.uninstall();
@@ -143,6 +147,50 @@ export class Cli {
       this.out(`${e.id} — ${e.installed ? `installed ${e.version ?? '?'}` : 'absent'}, model ${e.models[0]}, parallel ${e.parallelLimit}`);
     }
     return 0;
+  }
+
+  // Read an approved plan.md and print crewcast's per-unit crew allocation (§7.14): group, CLI, model, effort, skills, files.
+  private async plan(args: string[]): Promise<number> {
+    let parsed;
+    try {
+      parsed = parseArgs({ args, allowPositionals: true, options: { json: { type: 'boolean', default: false } } });
+    } catch {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const file = parsed.positionals[0];
+    if (!file || parsed.positionals.length > 1) {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    let markdown: string;
+    try {
+      markdown = await readFile(file, 'utf8');
+    } catch (err) {
+      this.out(`error: cannot read ${file}: ${(err as Error).message}`);
+      return 1;
+    }
+    const { home, cwd } = this.paths();
+    const crewHome = this.crewcastHome();
+    const engines = await EngineCatalog.load(crewHome);
+    const pickSkills = this.deps.pickSkills ?? (await this.defaultPickSkills(home, cwd, crewHome));
+    const alloc = await new PlanAllocator({ engines, leadEngine: 'claude', pickSkills }).allocate(parsePlan(markdown));
+    if (parsed.values.json) {
+      this.out(JSON.stringify(alloc));
+      return 0;
+    }
+    for (const u of alloc.units) {
+      this.out(`[${u.group}] ${u.id} → ${u.engine}${u.leadFallback ? ' (no worker CLI installed)' : ''}`);
+      this.out(`    model ${u.model}, effort ${u.effort ?? 'default'}; skills: ${u.skills.join(', ') || 'none'}; files: ${u.files.join(', ') || 'none'}`);
+    }
+    return 0;
+  }
+
+  private async defaultPickSkills(home: string, cwd: string, crewHome: string): Promise<(text: string) => Promise<string[]>> {
+    const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+    const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+    const index = new SkillIndex({ baseUrl, home: crewHome });
+    return async text => (await index.top(text, skills, 3)).map(s => s.name);
   }
 
   private async setup(): Promise<number> {
