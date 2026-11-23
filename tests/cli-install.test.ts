@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -33,6 +33,24 @@ test('setup then uninstall round-trips: mcp add→remove, skill installed→remo
     const after = JSON.parse(await readFile(join(userHome, '.claude', 'settings.json'), 'utf8')) as { hooks?: Record<string, { hooks: { command: string }[] }[]> };
     const anyCrewcast = Object.values(after.hooks ?? {}).flat().some(e => e.hooks.some(h => h.command === 'crewcast hook'));
     assert.equal(anyCrewcast, false, 'all crewcast hooks removed');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('doctor reports which CLIs crewcast MCP is registered with (from the manifest)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-docreg-'));
+  try {
+    const crew = join(root, 'crewcast');
+    await mkdir(crew, { recursive: true });
+    await writeFile(join(crew, 'installed.json'), JSON.stringify({ version: 1, actions: [
+      { kind: 'mcp', server: 'crewcast', bin: 'claude' }, { kind: 'mcp', server: 'crewcast', bin: 'agy' },
+    ] }), 'utf8');
+    const run = async (_bin: string, args: string[]) => (args[0] === '--version' ? '1.0' : '--model --sandbox --json -c');
+    const lines: string[] = [];
+    await new Cli(l => lines.push(l), { env: { USERPROFILE: join(root, 'user'), CREWCAST_HOME: crew }, cwd: root, run, warm: async () => {} }).run(['doctor']);
+    const reg = lines.find(l => l.includes('registered'));
+    assert.ok(reg && reg.includes('claude') && reg.includes('agy'), lines.join('\n'));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

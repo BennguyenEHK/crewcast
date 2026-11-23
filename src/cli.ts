@@ -24,6 +24,7 @@ import { ReadMessagesTool } from './mcp/read-messages-tool.js';
 import { Mailbox } from './mailbox.js';
 import { spawn } from 'node:child_process';
 import { EngineCatalog, type Engine } from './engines/catalog.js';
+import { InstalledManifest } from './install/manifest.js';
 import { parsePlan } from './plan.js';
 import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
@@ -106,9 +107,8 @@ const USAGE = [
   '  setup',
   '  doctor',
   '  uninstall',
-  '  hook',
-  '  mcp',
   '  --version',
+  // `mcp` and `hook` are internal — a client (Claude Code / a worker) runs them, never a person — so they are not listed.
 ];
 
 export class Cli {
@@ -237,6 +237,9 @@ export class Cli {
       else this.out(`${e.id} — installed, flags ok`);
     }
     this.out(`warmed: ${report.warmed.join(', ')}`);
+    const mcp = (await new InstalledManifest(this.crewcastHome()).load()).filter(a => a.kind === 'mcp');
+    const bins = [...new Set(mcp.map(a => (a.kind === 'mcp' ? a.bin ?? 'claude' : '')))].filter(Boolean);
+    this.out(`mcp registered with: ${bins.join(', ') || 'none — run crewcast setup'}`);
     return 0;
   }
 
