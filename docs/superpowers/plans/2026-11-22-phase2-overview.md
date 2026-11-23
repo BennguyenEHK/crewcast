@@ -8,9 +8,9 @@ Phase 2 is built as five sub-plans, in this order. Each produces working, tested
 
 | Sub-plan | Scope / deliverable | Spec | Needs live CLIs? | Status |
 |---|---|---|---|---|
-| **2a — mailbox** | MCP tools `post_message(run, from, text)` / `read_messages(run, since)`; one JSONL file per run under `~/.crewcast/runs/<id>/`; secret/key-like redaction on write (§7.7). The two-way channel workers and captain talk over. | §7.7 | No — fakeable | pending |
-| **2b — worktree manager** | Create/remove a writer's worktree `<repo>-wt/<engine>-<n>` (own branch, shared history); cleanup order (unlink link → folder → branch); never link `node_modules`; the **file-ownership check** (a worker's changed-file list ⊆ its owned list, §7.7/§7.13). | §7.7 | No — temp git repo | pending |
-| **2c — full decide (per-unit allocation)** | Parse `plan.md` work units (`description` / `files:` / `depends:`); per unit, allocate locally and zero-token: grouping (parallel vs chained by `depends`), skills (embed the unit text, §7.5), CLI/model/effort (1b catalog + rules, §7.6), plugins/MCP (§7.5), flags (§7.6), and each writer's owned-files list. Extends the Decider; reuses the 1b catalog. | §7.6, §7.14 | No — fakeable | pending |
+| **2a — mailbox** | MCP tools `post_message(run, from, text)` / `read_messages(run, since)`; one JSONL file per run under `~/.crewcast/runs/<id>/`; secret/key-like redaction on write (§7.7). The two-way channel workers and captain talk over. | §7.7 | No — fakeable | **merged (PR #6)** |
+| **2b — worktree manager** | Create/remove a writer's worktree `<repo>-wt/<engine>-<n>` (own branch, shared history); cleanup order (unlink link → folder → branch); never link `node_modules`; the **file-ownership check** (a worker's changed-file list ⊆ its owned list, §7.7/§7.13). | §7.7 | No — temp git repo | **merged (PR #7)** |
+| **2c — full decide (per-unit allocation)** | Parse `plan.md` work units (`description` / `files:` / `depends:`); per unit, allocate locally and zero-token: grouping (parallel vs chained by `depends`), skills (embed the unit text, §7.5), CLI/model/effort (1b catalog + rules, §7.6), plugins/MCP (§7.5), flags (§7.6), and each writer's owned-files list. Extends the Decider; reuses the 1b catalog. | §7.6, §7.14 | No — fakeable | **merged (PR #8)** |
 | **2d — dispatch + run_status** | MCP tools `dispatch(plan)` and `run_status(run)`. One process per **engine group** (not per agent, §7.7); spawn each worker as a background child with its task card (goal, owned files, done, mailbox run id), its skills (§7.8), its worktree (2b) if it writes, and a per-run MCP config so it can talk back (2a). The file-ownership gate (2b) runs before a merge is offered. | §7.7, §7.13 | **Plumbing: no** (fake spawner). **Acceptance: yes.** | pending |
 | **2e — plan-mode dispatch hook** | The Claude Code hook that fires dispatch when the user approves the plan: verify the exact event (`PostToolUse` on `ExitPlanMode`, §7.14), read `plan.md`, call `dispatch`. Fail-open like the §7.2 hook. | §7.14 | No — payload fixture | pending |
 
@@ -31,6 +31,13 @@ So Phase 2 has two finish lines:
 - **1e — MCP catalog of other servers** (§7.5) is still pending from Phase 1; 2c's "plugins/MCP per unit" picks from whatever catalog exists, so 1e can land before or alongside 2c without blocking it.
 - **Public release** (README, cross-platform, CPU-only fallback) = **Phase 3** (§8).
 - **`crewcast pc`** (PC setup/cleanup/power) = **Phase 4** (§8).
+
+## Status (2026-11-22): paused before 2d/2e
+
+2a–2c are built, reviewed and merged to main (176/176 tests). Per the owner's choice ("build 2a–2c, pause at 2d"), 2d/2e wait on these **vendor facts** being confirmed before dispatch is built on them:
+- **Other CLIs' skill-folder paths (§7.8)** — Codex (`~/.codex/skills` or `~/.agents/skills`), Gemini (`~/.gemini/skills`), Copilot (`~/.copilot/skills`), Kiro (`~/.kiro/skills` + agent config). The spec says confirm each in the vendor's official docs.
+- **Each CLI's headless invocation** — how to run Codex/Gemini/Copilot/Kiro as a background worker given a task + a per-run MCP config (§7.7).
+- **The Claude Code plan-mode hook event (§7.14)** — is it `PostToolUse` on `ExitPlanMode`, and what payload does it carry? Verify against Claude Code docs, then a live check.
 
 ## Open calls for the owner
 
