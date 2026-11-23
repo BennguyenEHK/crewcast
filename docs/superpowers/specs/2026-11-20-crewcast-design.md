@@ -437,7 +437,7 @@ The captain names no CLI, model, skill, plugin or flag. Naming them would spend 
 | Phase | Delivers | Done when |
 |---|---|---|
 | **0** | Test set (146 synthetic tasks, all 136 skills); `crewcast decide "<task>"`; shadow log; `stats` | **Done (2026-11-22): go.** mode 1.00, skills 0.795–0.822, p95 ~1.1 s on the owner's laptop. Model `kev:4b-q4_K_M`, embedding `mxbai-embed-large`. See `docs/phase0-results.md`. |
-| **1** | `setup` / `doctor` / `uninstall`; MCP server with `decide` and `catalog`; Claude skill (incl. STE and ship steps); hook; plugin manifest; skill copy to other CLIs | A clean `npm i -g` + `setup` on the owner's laptop gives a working hook and skill, and `uninstall` leaves nothing behind. |
+| **1** | `setup` / `doctor` / `uninstall`; MCP server with `decide` and `catalog`; Claude skill (incl. STE and ship steps); hook; plugin manifest; skill copy to other CLIs. Built as sub-plans **1a** MCP server → **1b** engine catalog (model/effort/CLI/flags) → **1c** skill + hook + manifest → **1d** setup/doctor/uninstall + MCP catalog + skill-copy (roadmap: `docs/superpowers/plans/2026-11-22-phase1-overview.md`). | A clean `npm i -g` + `setup` on the owner's laptop gives a working hook and skill, and `uninstall` leaves nothing behind. |
 | **2** | Dispatch, worktrees, mailbox (`dispatch`, `post_message`, `read_messages`, `run_status`) | A two-engine team task runs, and its workers report back mid-task. |
 | **3** | Public release: README, cross-platform checks, CPU-only fallback backend | Works on a machine with no GPU and on macOS or Linux. |
 | **4 (later)** | `crewcast pc` (setup, cleanup, power mode, reusing the `windows-disk-cleanup` skill's approve-each-row rules); skill search, install and remove | Separate design when it starts. |
