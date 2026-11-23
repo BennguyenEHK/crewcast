@@ -15,12 +15,13 @@ export interface UnitAllocation extends WorkUnit {
 }
 export interface PlanAllocation { units: UnitAllocation[] }
 
-// shortcut: keyword risk + file-count size; upgrade if it mis-grades a real plan.
+// shortcut: keyword risk + file-count size. Boundaries avoid the obvious over-matches (tokenize, recharge, results table);
+// upgrade to a learned/scoped rule if it still mis-grades a real plan.
 const RISK: [RiskArea, RegExp][] = [
   ['secrets', /secret|credential|\.env/],
-  ['payments', /payment|billing|stripe|charge/],
-  ['auth', /auth|login|password|session|token/],
-  ['db_schema', /schema|migration|migrate|\btable\b/],
+  ['payments', /payment|billing|stripe|\bcharge\b/],
+  ['auth', /\bauth|login|password|session|\btoken\b/],
+  ['db_schema', /schema|migration|migrate/],
   ['deploy', /deploy|release|publish|\bci\b/],
 ];
 

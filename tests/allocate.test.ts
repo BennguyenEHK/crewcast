@@ -59,6 +59,16 @@ test('with only the lead installed, it falls back to the lead and flags it', asy
   assert.equal(out[0].leadFallback, true);
 });
 
+test('ordinary words like "results table" and "tokenize" are not graded risky', async () => {
+  const out = (await mk().allocate([
+    { id: 'T', description: 'add a results table component', files: ['ui.ts'], depends: [] },
+    { id: 'K', description: 'tokenize the input', files: ['lex.ts'], depends: [] },
+  ])).units;
+  assert.ok(out[0].model.endsWith('-base'), `results table graded risky: ${out[0].model}`);
+  assert.equal(out[0].effort, null);
+  assert.ok(out[1].model.endsWith('-base'), `tokenize graded risky: ${out[1].model}`);
+});
+
 test('an unknown dependency and a cycle both throw', async () => {
   await assert.rejects(mk().allocate([{ id: 'A', description: 'A', files: [], depends: ['ghost'] }]));
   await assert.rejects(mk().allocate([

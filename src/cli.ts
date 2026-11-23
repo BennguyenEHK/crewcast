@@ -172,7 +172,9 @@ export class Cli {
     }
     const { home, cwd } = this.paths();
     const crewHome = this.crewcastHome();
-    const engines = await EngineCatalog.load(crewHome);
+    let engines = await EngineCatalog.load(crewHome);
+    // A cold/default catalog has installed undefined (never run through detect/save) → detect now, else every unit falls back to the lead.
+    if (engines.every(e => e.installed === undefined)) engines = await new EngineCatalog({ run: this.deps.run }).detect();
     const pickSkills = this.deps.pickSkills ?? (await this.defaultPickSkills(home, cwd, crewHome));
     const alloc = await new PlanAllocator({ engines, leadEngine: 'claude', pickSkills }).allocate(parsePlan(markdown));
     if (parsed.values.json) {

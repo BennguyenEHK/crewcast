@@ -38,3 +38,8 @@ test('a duplicate unit id throws', () => {
 test('no units → empty list', () => {
   assert.deepEqual(parsePlan('# title only\njust prose\n'), []);
 });
+
+test('a wrapped files: list (trailing-comma continuation) keeps every file', () => {
+  const units = parsePlan('## U\nfiles: src/a.ts,\n  src/b.ts, src/c.ts\ndepends: none\n');
+  assert.deepEqual(units[0].files, ['src/a.ts', 'src/b.ts', 'src/c.ts']);
+});
