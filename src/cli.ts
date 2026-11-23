@@ -62,28 +62,33 @@ function defaultWarm(baseUrl: string): (model: string) => Promise<void> {
   };
 }
 
-interface Settings { hooks?: Record<string, { hooks: { type: string; command: string }[] }[]>; [k: string]: unknown }
+interface HookEntry { matcher?: string; hooks: { type: string; command: string }[] }
+interface Settings { hooks?: Record<string, HookEntry[]>; [k: string]: unknown }
 async function readSettings(path: string): Promise<Settings> {
   try { return JSON.parse(await readFile(path, 'utf8')) as Settings; } catch { return {}; }
 }
-// Adds the crewcast UserPromptSubmit hook to ~/.claude/settings.json, idempotently. Returns the path edited (recorded for reversal).
+const isCrewcast = (e: HookEntry): boolean => e.hooks?.some(h => h.command === 'crewcast hook');
+// Registers the crewcast hooks in ~/.claude/settings.json, idempotently: UserPromptSubmit (the shadow decision, §7.2) and
+// PostToolUse/ExitPlanMode (dispatch on plan approval, §7.14). Returns the path edited (recorded for reversal).
 async function installHook(userHome: string): Promise<string> {
   const path = join(userHome, '.claude', 'settings.json');
   await mkdir(dirname(path), { recursive: true });
   const settings = await readSettings(path);
   settings.hooks ??= {};
-  const list = (settings.hooks.UserPromptSubmit ??= []);
-  if (!list.some(e => e.hooks?.some(h => h.command === 'crewcast hook'))) {
-    list.push({ hooks: [{ type: 'command', command: 'crewcast hook' }] });
-  }
+  const ups = (settings.hooks.UserPromptSubmit ??= []);
+  if (!ups.some(isCrewcast)) ups.push({ hooks: [{ type: 'command', command: 'crewcast hook' }] });
+  const post = (settings.hooks.PostToolUse ??= []);
+  if (!post.some(e => e.matcher === 'ExitPlanMode' && isCrewcast(e))) post.push({ matcher: 'ExitPlanMode', hooks: [{ type: 'command', command: 'crewcast hook' }] });
   await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf8');
   return path;
 }
 async function removeHook(path: string): Promise<void> {
   const settings = await readSettings(path);
-  const list = settings.hooks?.UserPromptSubmit;
-  if (!list) return;
-  settings.hooks!.UserPromptSubmit = list.filter(e => !e.hooks?.some(h => h.command === 'crewcast hook'));
+  if (!settings.hooks) return;
+  for (const event of Object.keys(settings.hooks)) {
+    settings.hooks[event] = settings.hooks[event].filter(e => !isCrewcast(e));
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
   await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf8');
 }
 
@@ -296,9 +301,11 @@ export class Cli {
   private async dispatchOnPlanApproval(): Promise<string> {
     try {
       const { cwd } = this.paths();
+      const planPath = join(cwd, 'plan.md');
+      await readFile(planPath, 'utf8'); // no plan.md → do nothing rather than report a phantom run
       const dispatch = this.deps.dispatchPlan ?? (await this.realDispatchPlan());
       const run = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-      await dispatch(join(cwd, 'plan.md'), run);
+      await dispatch(planPath, run);
       return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `crewcast: dispatched team run ${run} from plan.md.` } });
     } catch {
       return '';
@@ -333,8 +340,8 @@ export class Cli {
     const tools = [
       new DecideTool({ ask, skills, git, home: crewHome, baseUrl, defaultModel: 'kev:4b-q4_K_M' }),
       new CatalogTool({ skills }),
-      new PostMessageTool({ mailbox }),
-      new ReadMessagesTool({ mailbox }),
+      new PostMessageTool({ mailbox, defaultRun: () => process.env.CREWCAST_RUN }),
+      new ReadMessagesTool({ mailbox, defaultRun: () => process.env.CREWCAST_RUN }),
       new DispatchTool({ dispatch, newRun: () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }),
       new RunStatusTool({ status }),
     ];
@@ -358,12 +365,17 @@ export class Cli {
       worktrees: new WorktreeManager({ repoRoot: cwd }),
       mailbox,
       runsHome: crewHome,
-      spawn: async (bin, args, opts) => {
+      spawn: (bin, args, opts) => new Promise(resolve => {
+        // Resolve on 'spawn' or 'error' so a launch failure (e.g. a Windows .cmd shim unlaunchable without a shell) is a recorded
+        // worker, never an uncaught exception that would crash the long-lived MCP server.
         const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
-        child.stdin?.end(); // close stdin so agy -p does not hang on Windows
-        child.unref();
-        return { pid: child.pid ?? -1 };
-      },
+        child.on('error', e => resolve({ pid: null, error: (e as Error).message }));
+        child.on('spawn', () => {
+          child.stdin?.end(); // close stdin so agy -p does not hang on Windows
+          child.unref();
+          resolve({ pid: child.pid ?? null });
+        });
+      }),
       skillText,
       mcpConfig: run => ({ CREWCAST_RUN: run }),
     });

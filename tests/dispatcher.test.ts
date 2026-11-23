@@ -60,6 +60,7 @@ test('dispatch: writer gets a worktree, reader runs in the repo root; prompt car
     });
 
     assert.equal(state.workers.length, 2);
+    assert.equal(state.workers[0].pid, 100); // a successful spawn records its pid
     const w = state.workers.find(x => x.unit === 'W')!;
     const r = state.workers.find(x => x.unit === 'R')!;
     assert.ok(w.worktree && w.cwd.replace(/\\/g, '/').includes('-wt/codex-'), `writer cwd: ${w.cwd}`);
@@ -76,6 +77,48 @@ test('dispatch: writer gets a worktree, reader runs in the repo root; prompt car
 
     const saved = JSON.parse(await readFile(join(home, 'runs', 'run-1', 'run.json'), 'utf8')) as { workers: unknown[] };
     assert.equal(saved.workers.length, 2);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a spawn that fails is recorded as a failed worker, not thrown (no server crash)', async () => {
+  const { root, parent, cleanup } = await repo();
+  try {
+    const home = join(parent, 'crew');
+    const dispatcher = new Dispatcher({
+      worktrees: new WorktreeManager({ repoRoot: root }),
+      mailbox: new Mailbox(home), runsHome: home,
+      spawn: async () => ({ pid: null, error: 'ENOENT: codex.cmd not launchable without a shell' }),
+      skillText: async () => '', mcpConfig: r => ({ CREWCAST_RUN: r }),
+    });
+    const state = await dispatcher.dispatch(
+      { units: [unit({ id: 'W', engine: 'codex', files: ['w.ts'] })] },
+      { run: 'r2', repoRoot: root, engines: [eng('codex', ['exec', '{task}'])] },
+    );
+    assert.equal(state.workers[0].pid, null);
+    assert.match(state.workers[0].error!, /ENOENT/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('injected skill text is capped so the worker arg stays within OS command-line limits', async () => {
+  const { root, parent, cleanup } = await repo();
+  try {
+    const home = join(parent, 'crew');
+    const calls: string[][] = [];
+    const dispatcher = new Dispatcher({
+      worktrees: new WorktreeManager({ repoRoot: root }),
+      mailbox: new Mailbox(home), runsHome: home,
+      spawn: async (_b, args) => { calls.push(args); return { pid: 1 }; },
+      skillText: async () => 'x'.repeat(50_000), mcpConfig: r => ({ CREWCAST_RUN: r }),
+    });
+    await dispatcher.dispatch(
+      { units: [unit({ id: 'W', engine: 'codex', files: ['w.ts'], skills: ['big'] })] },
+      { run: 'r3', repoRoot: root, engines: [eng('codex', ['exec', '{task}'])] },
+    );
+    assert.ok(calls[0].join('').length < 32_000, `prompt not capped: ${calls[0].join('').length}`);
   } finally {
     await cleanup();
   }

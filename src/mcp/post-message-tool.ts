@@ -11,10 +11,10 @@ export class PostMessageTool implements McpTool {
     required: ['run', 'from', 'text'],
   };
 
-  constructor(private readonly deps: { mailbox: Mailbox }) {}
+  constructor(private readonly deps: { mailbox: Mailbox; defaultRun?: () => string | undefined }) {}
 
   async call(args: Record<string, unknown>): Promise<McpContent> {
-    const run = str(args.run), from = str(args.from), text = str(args.text);
+    const run = str(args.run) ?? this.deps.defaultRun?.(), from = str(args.from), text = str(args.text);
     if (!run || !from || text === undefined) return err('run, from and text are required (non-empty strings)');
     try {
       await this.deps.mailbox.post(run, from, text);

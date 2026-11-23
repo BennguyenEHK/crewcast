@@ -36,6 +36,15 @@ test('read_messages honors since', async () => {
   });
 });
 
+test('run defaults from the environment (CREWCAST_RUN) when the arg is omitted', async () => {
+  await withMbx(async mailbox => {
+    const defaultRun = () => 'r9';
+    await new PostMessageTool({ mailbox, defaultRun }).call({ from: 'w', text: 'hi' }); // no run arg
+    const r = await new ReadMessagesTool({ mailbox, defaultRun }).call({});               // no run arg
+    assert.deepEqual((JSON.parse(r.content[0].text) as { messages: { text: string }[] }).messages.map(m => m.text), ['hi']);
+  });
+});
+
 test('bad args are reported as isError, never thrown', async () => {
   await withMbx(async mailbox => {
     assert.ok((await new PostMessageTool({ mailbox }).call({ run: 'r', from: 'w' })).isError);     // no text

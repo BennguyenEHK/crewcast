@@ -5,7 +5,9 @@ import type { PlanAllocation, UnitAllocation } from '../decide/allocate.js';
 import type { Mailbox } from '../mailbox.js';
 import type { Worktree, WorktreeManager } from '../worktree.js';
 
-export interface WorkerRecord { unit: string; engine: string; group: number; cwd: string; worktree: Worktree | null; files: string[]; pid: number }
+export interface WorkerRecord { unit: string; engine: string; group: number; cwd: string; worktree: Worktree | null; files: string[]; pid: number | null; error?: string }
+
+const SKILL_CAP = 24_000; // keep the task card + skills within the Windows ~32 KB command-line limit (§ worker arg)
 export interface RunState { run: string; startedAt: string; workers: WorkerRecord[] }
 export interface WorkerStatus extends WorkerRecord { messages: number; ownership: { ok: boolean; outside: string[] } | null }
 export interface RunStatus { run: string; workers: WorkerStatus[] }
@@ -18,7 +20,8 @@ export class Dispatcher {
       mailbox: Mailbox;
       runsHome: string;
       // spawn runs the trusted engine bin with resolved args; the prompt is an arg, never a shell string (§3 — no shell:true).
-      spawn: (bin: string, args: string[], opts: { cwd: string; env: Record<string, string> }) => Promise<{ pid: number }>;
+      // It resolves (never rejects) so a launch failure is a recorded worker, not an uncaught exception that kills the MCP server.
+      spawn: (bin: string, args: string[], opts: { cwd: string; env: Record<string, string> }) => Promise<{ pid: number | null; error?: string }>;
       skillText: (names: string[]) => Promise<string>;
       mcpConfig: (run: string) => Record<string, string>;
       now?: () => number;
@@ -43,8 +46,8 @@ export class Dispatcher {
       }
       const prompt = await this.card(u, opts.run);
       const args = [...engine.headless.map(a => a.replace('{task}', prompt)), ...u.args];
-      const { pid } = await this.deps.spawn(engine.bin, args, { cwd, env: this.deps.mcpConfig(opts.run) });
-      workers.push({ unit: u.id, engine: u.engine, group: u.group, cwd, worktree, files: u.files, pid });
+      const { pid, error } = await this.deps.spawn(engine.bin, args, { cwd, env: this.deps.mcpConfig(opts.run) });
+      workers.push({ unit: u.id, engine: u.engine, group: u.group, cwd, worktree, files: u.files, pid, ...(error ? { error } : {}) });
     }
     const state: RunState = { run: opts.run, startedAt: new Date((this.deps.now ?? Date.now)()).toISOString(), workers };
     const dir = join(this.deps.runsHome, 'runs', opts.run);
@@ -68,7 +71,8 @@ export class Dispatcher {
 
   // The worker's task card (§7.7): goal, owned files, how to report, the mailbox run id, then the chosen skills' text (§7.8).
   private async card(u: UnitAllocation, run: string): Promise<string> {
-    const skills = await this.deps.skillText(u.skills);
+    let skills = await this.deps.skillText(u.skills);
+    if (skills.length > SKILL_CAP) skills = `${skills.slice(0, SKILL_CAP)}\n…[skill text truncated]`;
     return [
       `# Task: ${u.description}`,
       `Owned files (do not touch anything else): ${u.files.join(', ') || '(read-only, no files)'}`,

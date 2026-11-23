@@ -11,10 +11,10 @@ export class ReadMessagesTool implements McpTool {
     required: ['run'],
   };
 
-  constructor(private readonly deps: { mailbox: Mailbox }) {}
+  constructor(private readonly deps: { mailbox: Mailbox; defaultRun?: () => string | undefined }) {}
 
   async call(args: Record<string, unknown>): Promise<McpContent> {
-    const run = typeof args.run === 'string' && args.run ? args.run : undefined;
+    const run = (typeof args.run === 'string' && args.run ? args.run : undefined) ?? this.deps.defaultRun?.();
     if (!run) return err('run is required (a non-empty string)');
     if (args.since !== undefined && typeof args.since !== 'number') return err('since must be a number');
     try {

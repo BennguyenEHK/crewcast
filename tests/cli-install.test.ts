@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -22,11 +22,17 @@ test('setup then uninstall round-trips: mcp add→remove, skill installed→remo
     assert.ok(runCalls.some(c => c[1] === 'mcp' && c[2] === 'add'), 'mcp add called');
     await stat(join(userHome, '.claude', 'skills', 'crewcast', 'SKILL.md')); // skill copied
     await stat(join(crew, 'installed.json')); // manifest written
+    const settings = JSON.parse(await readFile(join(userHome, '.claude', 'settings.json'), 'utf8')) as { hooks: Record<string, { matcher?: string; hooks: { command: string }[] }[]> };
+    assert.ok(settings.hooks.UserPromptSubmit.some(e => e.hooks.some(h => h.command === 'crewcast hook')), 'UserPromptSubmit hook installed');
+    assert.ok(settings.hooks.PostToolUse.some(e => e.matcher === 'ExitPlanMode' && e.hooks.some(h => h.command === 'crewcast hook')), 'ExitPlanMode hook installed');
 
     assert.equal(await cli.run(['uninstall']), 0);
     assert.ok(runCalls.some(c => c[1] === 'mcp' && c[2] === 'remove'), 'mcp remove called');
     await assert.rejects(stat(join(userHome, '.claude', 'skills', 'crewcast', 'SKILL.md'))); // skill removed
     await assert.rejects(stat(join(crew, 'installed.json'))); // manifest cleared
+    const after = JSON.parse(await readFile(join(userHome, '.claude', 'settings.json'), 'utf8')) as { hooks?: Record<string, { hooks: { command: string }[] }[]> };
+    const anyCrewcast = Object.values(after.hooks ?? {}).flat().some(e => e.hooks.some(h => h.command === 'crewcast hook'));
+    assert.equal(anyCrewcast, false, 'all crewcast hooks removed');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
