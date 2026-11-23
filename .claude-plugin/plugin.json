@@ -1,0 +1,14 @@
+{
+  "name": "crewcast",
+  "version": "0.0.0",
+  "description": "Decide how AI coding work runs — solo or team, which skills, MCP servers and crew — with a local non-generative model, before any tokens are spent.",
+  "author": { "name": "crewcast" },
+  "mcpServers": {
+    "crewcast": { "command": "npx", "args": ["-y", "crewcast", "mcp"] }
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "crewcast hook" } ] }
+    ]
+  }
+}
