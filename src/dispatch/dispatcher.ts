@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Engine } from '../engines/catalog.js';
 import type { PlanAllocation, UnitAllocation } from '../decide/allocate.js';
@@ -7,6 +7,8 @@ import type { Worktree, WorktreeManager } from '../worktree.js';
 
 export interface WorkerRecord { unit: string; engine: string; group: number; cwd: string; worktree: Worktree | null; files: string[]; pid: number }
 export interface RunState { run: string; startedAt: string; workers: WorkerRecord[] }
+export interface WorkerStatus extends WorkerRecord { messages: number; ownership: { ok: boolean; outside: string[] } | null }
+export interface RunStatus { run: string; workers: WorkerStatus[] }
 
 // Starts a team run from a plan allocation (§7.7): a worktree per writing unit, a task card + injected skills per worker, one spawned process each.
 export class Dispatcher {
@@ -49,6 +51,19 @@ export class Dispatcher {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'run.json'), JSON.stringify(state, null, 2), 'utf8');
     return state;
+  }
+
+  // Reports a run: how many messages each worker posted, and for a writer whether its changed files stayed inside its owned set (§7.13).
+  async status(run: string): Promise<RunStatus> {
+    const state = JSON.parse(await readFile(join(this.deps.runsHome, 'runs', run, 'run.json'), 'utf8')) as RunState;
+    const { messages } = await this.deps.mailbox.read(run);
+    const workers: WorkerStatus[] = [];
+    for (const w of state.workers) {
+      const count = messages.filter(m => m.from === w.unit).length;
+      const ownership = w.worktree ? await this.deps.worktrees.ownership(w.worktree, w.files) : null;
+      workers.push({ ...w, messages: count, ownership });
+    }
+    return { run, workers };
   }
 
   // The worker's task card (§7.7): goal, owned files, how to report, the mailbox run id, then the chosen skills' text (§7.8).
