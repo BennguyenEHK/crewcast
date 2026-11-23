@@ -29,8 +29,8 @@ import { parsePlan } from './plan.js';
 import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
 import { resolveLauncher } from './dispatch/launcher.js';
-import { RunWatch } from './dispatch/run-watch.js';
-import { renderWatch, renderFeed } from './dispatch/watch-render.js';
+import { RunWatch, type WatchRow } from './dispatch/run-watch.js';
+import { renderWatch, renderFeed, appendLines, type FeedCursor } from './dispatch/watch-render.js';
 import { ActivityLog } from './activity.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
@@ -227,11 +227,24 @@ export class Cli {
       this.out(`run not found: ${given}`);
       return 1;
     }
-    // No early exit when there are no runs: the feed is live, so watch keeps looping and fills in as crewcast acts.
-    const run = given ?? (await this.latestRun());
     const interval = Math.max(200, Number(parsed.values.interval) || 1000);
+    const crewHome = this.crewcastHome();
+    const activity = new ActivityLog(crewHome);
+    const watcher = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
+    // Append-only (scrollable): print each new event and each worker status change as it happens, never clearing the
+    // screen, so the terminal keeps the whole history. No early exit on no-runs — the feed is live. Ctrl-C stops it.
+    let run: string | undefined = given ?? (await this.latestRun());
+    let cursor: FeedCursor = { events: 0, workers: {} };
+    let greeted = false;
     for (;;) {
-      this.out('\x1b[2J\x1b[H' + (await this.watchOnce(run))); // clear screen + home, then the frame
+      if (!given && !run) run = await this.latestRun(); // pick up the first run once it appears
+      const events = await activity.all();
+      let rows: WatchRow[] = [];
+      if (run) { try { rows = (await watcher.view(run)).rows; } catch { /* run.json missing/mid-write: skip worker lines this tick */ } }
+      const { lines, cursor: next } = appendLines(events, rows, cursor, new Date().toISOString().slice(11, 19));
+      cursor = next;
+      if (lines.length) lines.forEach(l => this.out(l));
+      else if (!greeted && cursor.events === 0 && !run) { this.out('nothing yet — enter a prompt in Claude Code'); greeted = true; }
       await new Promise(r => setTimeout(r, interval));
     }
   }

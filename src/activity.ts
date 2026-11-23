@@ -23,13 +23,18 @@ export class ActivityLog {
     } catch { /* never throw out of a narration write */ }
   }
 
-  async recent(n: number): Promise<ActivityEvent[]> {
+  // All events in order; a missing or unreadable log (e.g. home is a file) is just "no activity to show".
+  async all(): Promise<ActivityEvent[]> {
     try {
       const { rows } = await ShadowLog.readJsonl<ActivityEvent>(this.file);
-      return rows.slice(-n);
+      return rows;
     } catch {
-      return []; // a non-ENOENT read error (e.g. home is a file) is still just "no activity to show"
+      return [];
     }
+  }
+
+  async recent(n: number): Promise<ActivityEvent[]> {
+    return (await this.all()).slice(-n);
   }
 }
 
