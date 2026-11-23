@@ -9,7 +9,8 @@
     "crewcast": "dist/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

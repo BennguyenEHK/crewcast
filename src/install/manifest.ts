@@ -37,4 +37,11 @@ export class InstalledManifest {
   async clear(): Promise<void> {
     await rm(this.file, { force: true });
   }
+
+  // Rewrites the manifest to exactly these actions — uninstall keeps what it could not reverse so a retry can still find it.
+  async keep(actions: Action[]): Promise<void> {
+    if (actions.length === 0) return this.clear();
+    await mkdir(this.home, { recursive: true });
+    await writeFile(this.file, JSON.stringify({ version: 1, actions }, null, 2), 'utf8');
+  }
 }

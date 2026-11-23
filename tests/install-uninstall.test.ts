@@ -42,20 +42,20 @@ test('uninstall with no manifest → nothing removed, no crash', async () => {
   });
 });
 
-test('an already-deleted target is skipped; the rest are still removed', async () => {
+test('a removal that genuinely fails is kept in the manifest and reported; the rest are still removed', async () => {
   await withHome(async home => {
     const m = new InstalledManifest(home);
     await m.record({ kind: 'mcp', server: 'crewcast' });
-    await m.record({ kind: 'skillCopy', dest: '/gone' });
-    const removed: string[] = [];
+    await m.record({ kind: 'skillCopy', dest: '/locked' });
     const u = new Uninstall({
       home,
       run: async () => '',
-      remove: async p => { if (p === '/gone') throw new Error('ENOENT'); removed.push(p); },
+      remove: async p => { if (p === '/locked') throw new Error('EPERM'); }, // force:true swallows a missing file, so a throw is a real failure
       removeHook: async () => {},
     });
     const res = await u.run(); // must not throw
-    assert.ok(res.removed.some(r => r.includes('mcp')));
-    assert.deepEqual(await m.load(), []);
+    assert.ok(res.removed.some(r => r.includes('mcp')));    // the reversible change is gone
+    assert.ok(res.failed.some(f => f.includes('/locked')));  // the failure is reported, not swallowed
+    assert.deepEqual(await m.load(), [{ kind: 'skillCopy', dest: '/locked' }]); // manifest keeps what's still on the machine
   });
 });

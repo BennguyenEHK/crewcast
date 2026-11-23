@@ -183,9 +183,10 @@ export class Cli {
       remove: path => rm(path, { recursive: true, force: true }),
       removeHook,
     }).run();
-    if (res.removed.length === 0) this.out('nothing to uninstall');
+    if (res.removed.length === 0 && res.failed.length === 0) this.out('nothing to uninstall');
     for (const r of res.removed) this.out(`✓ removed ${r}`);
-    return 0;
+    for (const f of res.failed) this.out(`✗ kept (reverse failed): ${f}`);
+    return res.failed.length ? 1 : 0;
   }
 
   // UserPromptSubmit hook: fail-open. Emits a short decision context, or nothing, and never blocks the prompt.
