@@ -1,6 +1,14 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EngineCatalog, DEFAULT_ENGINES, type Engine } from '../src/engines/catalog.js';
+
+async function withHome(fn: (home: string) => Promise<void>) {
+  const home = await mkdtemp(join(tmpdir(), 'cc-eng-'));
+  try { await fn(home); } finally { await rm(home, { recursive: true, force: true }); }
+}
 
 const eng = (id: string, bin: string): Engine => ({
   id, bin, versionArgs: ['--version'], headless: ['-p', '{task}'],
@@ -41,4 +49,24 @@ test('DEFAULT_ENGINES contains no permission-off flag', () => {
       assert.ok(!bad.test(f), `${e.id}: ${f}`);
     }
   }
+});
+
+test('save then load round-trips the engines', async () => {
+  await withHome(async home => {
+    await new EngineCatalog().save(DEFAULT_ENGINES, home);
+    assert.deepEqual(await EngineCatalog.load(home), DEFAULT_ENGINES);
+  });
+});
+
+test('load with no file returns DEFAULT_ENGINES', async () => {
+  await withHome(async home => {
+    assert.deepEqual(await EngineCatalog.load(home), DEFAULT_ENGINES);
+  });
+});
+
+test('load on corrupt json returns DEFAULT_ENGINES, no throw', async () => {
+  await withHome(async home => {
+    await writeFile(join(home, 'engine-catalog.json'), '{not json', 'utf8');
+    assert.deepEqual(await EngineCatalog.load(home), DEFAULT_ENGINES);
+  });
 });
