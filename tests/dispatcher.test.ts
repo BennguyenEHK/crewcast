@@ -75,6 +75,7 @@ test('dispatch: writer gets a worktree, reader runs in the repo root; prompt car
     assert.ok(writerCall.args.includes('--json'));     // the allocation's flags are passed
     assert.deepEqual(writerCall.opts.env, { CREWCAST_RUN: 'run-1' });
 
+    assert.deepEqual(w.skills, ['skill-a']); // the unit's skills are recorded for the watch view
     const saved = JSON.parse(await readFile(join(home, 'runs', 'run-1', 'run.json'), 'utf8')) as { workers: unknown[] };
     assert.equal(saved.workers.length, 2);
   } finally {
