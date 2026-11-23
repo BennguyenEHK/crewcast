@@ -22,9 +22,14 @@ import { CatalogTool } from './mcp/catalog-tool.js';
 import { PostMessageTool } from './mcp/post-message-tool.js';
 import { ReadMessagesTool } from './mcp/read-messages-tool.js';
 import { Mailbox } from './mailbox.js';
-import { EngineCatalog } from './engines/catalog.js';
+import { spawn } from 'node:child_process';
+import { EngineCatalog, type Engine } from './engines/catalog.js';
 import { parsePlan } from './plan.js';
 import { PlanAllocator } from './decide/allocate.js';
+import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
+import { WorktreeManager } from './worktree.js';
+import { DispatchTool } from './mcp/dispatch-tool.js';
+import { RunStatusTool } from './mcp/run-status-tool.js';
 import { Setup } from './install/setup.js';
 import { Doctor } from './install/doctor.js';
 import { Uninstall } from './install/uninstall.js';
@@ -302,13 +307,54 @@ export class Cli {
     const crewHome = this.crewcastHome();
     const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
     const mailbox = new Mailbox(crewHome);
+    const { dispatch, status } = this.buildDispatch(home, cwd, crewHome, baseUrl, skills, mailbox);
     const tools = [
       new DecideTool({ ask, skills, git, home: crewHome, baseUrl, defaultModel: 'kev:4b-q4_K_M' }),
       new CatalogTool({ skills }),
       new PostMessageTool({ mailbox }),
       new ReadMessagesTool({ mailbox }),
+      new DispatchTool({ dispatch, newRun: () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }),
+      new RunStatusTool({ status }),
     ];
     return new McpServer({ tools, serverInfo: { name: 'crewcast', version } });
+  }
+
+  // Wires the allocate→dispatch pipeline with real defaults: spawn (no shell; closes stdin for the agy Windows hang), skill text from SKILL.md, per-run env.
+  private buildDispatch(home: string, cwd: string, crewHome: string, baseUrl: string, skills: Skill[], mailbox: Mailbox): {
+    dispatch: (plan: string, run: string) => Promise<RunState>;
+    status: (run: string) => Promise<RunStatus>;
+  } {
+    const index = new SkillIndex({ baseUrl, home: crewHome });
+    const skillText = async (names: string[]): Promise<string> => {
+      const texts = await Promise.all(names.map(async n => {
+        const s = skills.find(x => x.name === n);
+        try { return s ? await readFile(s.path, 'utf8') : ''; } catch { return ''; }
+      }));
+      return texts.filter(Boolean).join('\n\n');
+    };
+    const dispatcher = new Dispatcher({
+      worktrees: new WorktreeManager({ repoRoot: cwd }),
+      mailbox,
+      runsHome: crewHome,
+      spawn: async (bin, args, opts) => {
+        const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
+        child.stdin?.end(); // close stdin so agy -p does not hang on Windows
+        child.unref();
+        return { pid: child.pid ?? -1 };
+      },
+      skillText,
+      mcpConfig: run => ({ CREWCAST_RUN: run }),
+    });
+    const dispatch = async (plan: string, run: string): Promise<RunState> => {
+      let markdown = plan;
+      try { markdown = await readFile(plan, 'utf8'); } catch { /* not a path → treat `plan` as the markdown itself */ }
+      let engines: Engine[] = await EngineCatalog.load(crewHome);
+      if (engines.every(e => e.installed === undefined)) engines = await new EngineCatalog({ run: this.deps.run }).detect();
+      const pickSkills = this.deps.pickSkills ?? (async (text: string) => (await index.top(text, skills, 3)).map(s => s.name));
+      const alloc = await new PlanAllocator({ engines, leadEngine: 'claude', pickSkills }).allocate(parsePlan(markdown));
+      return dispatcher.dispatch(alloc, { run, repoRoot: cwd, engines });
+    };
+    return { dispatch, status: run => dispatcher.status(run) };
   }
 
   private paths(): { home: string; cwd: string } {
