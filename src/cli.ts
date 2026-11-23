@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
+import { cursorTo, clearScreenDown } from 'node:readline';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, promisify } from 'node:util';
@@ -30,8 +31,8 @@ import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
 import { resolveLauncher } from './dispatch/launcher.js';
 import { RunWatch, type WatchView } from './dispatch/run-watch.js';
-import { appendLines, ansiPaint, noPaint, type FeedCursor, type Paint } from './dispatch/watch-render.js';
-import { ActivityLog } from './activity.js';
+import { feedLines, agentLines, decisionLines, renderDashboard, ansiPaint, noPaint, type Line, type Paint } from './dispatch/watch-render.js';
+import { ActivityLog, type ActivityEvent } from './activity.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
 import { RunStatusTool } from './mcp/run-status-tool.js';
@@ -232,33 +233,54 @@ export class Cli {
       return 1;
     }
     const interval = Math.max(200, Number(parsed.values.interval) || 1000);
-    // Append-only (scrollable): print each new event and worker-status change as it happens, never clearing the screen,
-    // so the terminal keeps the whole history. No early exit on no-runs — the feed is live. Ctrl-C stops it.
+    const tty = Boolean(process.stdout.isTTY);
     // NO_COLOR convention: its presence (even empty) disables color; otherwise color only on an interactive terminal.
-    const paint: Paint = process.stdout.isTTY && process.env.NO_COLOR === undefined ? ansiPaint : noPaint;
-    const state: { run?: string; cursor: FeedCursor; greeted: boolean } = { run: given, cursor: { events: 0, workers: {} }, greeted: false };
+    const paint: Paint = tty && process.env.NO_COLOR === undefined ? ansiPaint : noPaint;
+    if (!tty) {
+      // Not a real terminal (piped, captured, or launched via a wrapper like `cmd /c`): an in-place dashboard can't
+      // animate and the clear codes would just pile up, so print one clean frame and stop.
+      this.out(await this.watchFrame(given, paint));
+      return 0;
+    }
+    // Two-pane dashboard: redraw in place each tick via the readline cursor API (reliable clear, no flash, no pile-up). Ctrl-C stops it.
     for (;;) {
-      for (const line of await this.watchTick(given, state, paint)) this.out(line);
+      cursorTo(process.stdout, 0, 0);
+      clearScreenDown(process.stdout);
+      process.stdout.write(await this.watchFrame(given, paint));
       await new Promise(r => setTimeout(r, interval));
     }
   }
 
-  // One watch tick, extracted so the loop glue is testable: resolve the run, read the activity log + run view, and return
-  // only the lines to print this tick — new events, a fresh agents block on any worker change, or the "nothing yet" greeting.
-  private async watchTick(given: string | undefined, state: { run?: string; cursor: FeedCursor; greeted: boolean }, paint: Paint): Promise<string[]> {
+  // One dashboard frame (extracted so it is testable): the feed pane over the lower pane — a team run's worker rows, or
+  // in solo the latest decision. Reads the activity log + (if a run resolves) its view, sized to the terminal.
+  private async watchFrame(given: string | undefined, paint: Paint): Promise<string> {
     const crewHome = this.crewcastHome();
-    if (!given && !state.run) state.run = await this.latestRun(); // pick up the first run once it appears
     const events = await new ActivityLog(crewHome).all();
+    const run = given ?? (await this.latestRun()); // follow the latest run as it appears
     let view: WatchView | null = null;
-    if (state.run) {
+    if (run) {
       const watcher = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
-      try { view = await watcher.view(state.run); } catch { /* run.json missing/mid-write: skip the worker block this tick */ }
+      try { view = await watcher.view(run); } catch { /* run.json missing/mid-write: fall back to the decision pane this tick */ }
     }
-    const { lines, cursor } = appendLines(events, view, state.cursor, new Date().toISOString().slice(11, 19), paint);
-    state.cursor = cursor;
-    if (lines.length) return lines;
-    if (!state.greeted && cursor.events === 0 && !state.run) { state.greeted = true; return ['nothing yet — enter a prompt in Claude Code']; }
-    return [];
+    let lower: Line[];
+    let lowerTitle: string;
+    if (view && view.rows.length) {
+      lower = agentLines(view);
+      lowerTitle = `agents · ${view.rows.length}`;
+    } else {
+      const decided = [...events].reverse().find((e): e is Extract<ActivityEvent, { kind: 'decided' }> => e.kind === 'decided');
+      lower = decided ? decisionLines(decided) : [{ text: 'no decision yet — enter a prompt in Claude Code', color: 'dim' }];
+      lowerTitle = decided ? `decision · ${decided.mode}` : 'decision';
+    }
+    return renderDashboard({
+      feed: feedLines(events.slice(-200)),
+      feedTitle: 'crewcast · live feed',
+      lower,
+      lowerTitle,
+      cols: process.stdout.columns ?? 80,
+      rows: process.stdout.rows ?? 24,
+      paint,
+    });
   }
 
   // The most recently started run under <crewHome>/runs, by run.json mtime. undefined if there are none.
