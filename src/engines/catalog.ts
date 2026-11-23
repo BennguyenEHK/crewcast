@@ -27,7 +27,10 @@ export interface Engine {
 // Seed recipes from spec §7.6. Vendor facts to verify (§10); doctor (Phase 1d) checks them against --help.
 export const DEFAULT_ENGINES: Engine[] = [
   { id: 'claude', bin: 'claude', versionArgs: ['--version'], headless: ['-p', '{task}'], models: ['default'], strongModel: null, modelFlag: '--model', effortArgs: [], highEffort: null, parallelLimit: 1, writeFlags: [], readFlags: [], safeFlags: [], autoMode: false },
-  { id: 'gemini', bin: 'gemini', versionArgs: ['--version'], headless: ['-p', '{task}'], models: ['default'], strongModel: null, modelFlag: '-m', effortArgs: [], highEffort: null, parallelLimit: 1, writeFlags: [], readFlags: [], safeFlags: ['-y', '--output-format', 'json'], autoMode: false },
+  // Google retired Gemini CLI for individual accounts (June 2026) and replaced it with Antigravity CLI (`agy`), which carries over
+  // Agent Skills/Hooks/Subagents/Extensions. Headless is `agy -p "<task>"`. Note for Phase 2 dispatch: on Windows `agy -p` can hang
+  // unless the child's stdin is closed. Skills-folder path is unconfirmed, so agy uses the §7.8 prompt-injection fallback for skills.
+  { id: 'agy', bin: 'agy', versionArgs: ['--version'], headless: ['-p', '{task}'], models: ['default'], strongModel: null, modelFlag: '--model', effortArgs: [], highEffort: null, parallelLimit: 1, writeFlags: [], readFlags: [], safeFlags: [], autoMode: false },
   { id: 'codex', bin: 'codex', versionArgs: ['--version'], headless: ['exec', '{task}'], models: ['default'], strongModel: null, modelFlag: '--model', effortArgs: ['-c', "model_reasoning_effort={effort}"], highEffort: 'high', parallelLimit: 2, writeFlags: ['--sandbox', 'workspace-write'], readFlags: ['--sandbox', 'read-only'], safeFlags: ['--json'], autoMode: false },
   { id: 'copilot', bin: 'copilot', versionArgs: ['--version'], headless: ['-p', '{task}'], models: ['default'], strongModel: null, modelFlag: '--model', effortArgs: [], highEffort: null, parallelLimit: 1, writeFlags: [], readFlags: [], safeFlags: ['--allow-all-tools', '-s'], autoMode: false },
   { id: 'kiro', bin: 'kiro-cli', versionArgs: ['--version'], headless: ['{task}'], models: ['default'], strongModel: null, modelFlag: null, effortArgs: [], highEffort: null, parallelLimit: 1, writeFlags: [], readFlags: [], safeFlags: [], autoMode: true },

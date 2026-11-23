@@ -8,7 +8,7 @@ export interface TranscriptSegments { prompts: PromptSegment[]; skipped: number 
 
 // Subagent types that are read-only helpers, not a second working agent.
 const SOLO_AGENTS = new Set(['web-fetch', 'Explore', 'claude-code-guide', 'statusline-setup']);
-const ENGINE_CMD = /^\s*(codex|gemini|copilot|kiro-cli|claude\s+-p)(\s|$)/;
+const ENGINE_CMD = /^\s*(codex|agy|gemini|copilot|kiro-cli|claude\s+-p)(\s|$)/; // agy = Antigravity CLI; gemini kept for old transcripts
 // A shorter prompt is a reply ("yes", "ok go"), not a task; spec §7.2 uses the same cutoff for the hook.
 const MIN_TASK_WORDS = 8;
 
