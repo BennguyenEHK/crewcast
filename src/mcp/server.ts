@@ -44,7 +44,12 @@ export class McpServer {
         const tool = this.tools.find(t => t.name === name);
         if (!tool) return McpServer.ok(id, { content: [{ type: 'text', text: `unknown tool '${String(name)}'` }], isError: true });
         const args = (params.arguments ?? {}) as Record<string, unknown>;
-        return McpServer.ok(id, await tool.call(args));
+        try {
+          return McpServer.ok(id, await tool.call(args));
+        } catch (err) {
+          // A tool must never take down the session: surface its failure as an error result.
+          return McpServer.ok(id, { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true });
+        }
       }
       default:
         return McpServer.error(id, -32601, `method not found: ${method}`);
@@ -63,7 +68,14 @@ export class McpServer {
         output.write(JSON.stringify(McpServer.error(null, -32700, 'parse error')) + '\n');
         continue;
       }
-      const res = await this.handle(msg);
+      let res: object | null;
+      try {
+        res = await this.handle(msg);
+      } catch (err) {
+        // Belt-and-suspenders: no exception from handle ends the read loop.
+        output.write(JSON.stringify(McpServer.error((msg as { id?: unknown }).id ?? null, -32603, err instanceof Error ? err.message : 'internal error')) + '\n');
+        continue;
+      }
       if (res !== null) output.write(JSON.stringify(res) + '\n');
     }
   }

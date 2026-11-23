@@ -64,3 +64,24 @@ test('serve reads newline JSON, answers each, and reports a bad line as -32700',
   assert.equal(lines[1].error.code, -32700);
   assert.equal(lines[1].id, null);
 });
+
+test('a tool that throws becomes isError content, and serve keeps serving', async () => {
+  const boom: McpTool = { name: 'boom', description: 'throws', inputSchema: { type: 'object', properties: {} }, async call() { throw new Error('kaboom'); } };
+  const s = new McpServer({ tools: [boom, echo] });
+  // handle: a throwing tool is an isError result, not a rejected promise
+  const r = (await s.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'boom' } })) as any;
+  assert.equal(r.result.isError, true);
+  assert.match(r.result.content[0].text, /kaboom/);
+  // serve: a throwing-tool call followed by tools/list — the session survives and answers the second
+  const input = Readable.from([
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"boom"}}\n',
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n',
+  ]);
+  const chunks: string[] = [];
+  const output = new Writable({ write(c, _e, cb) { chunks.push(c.toString()); cb(); } });
+  await s.serve(input, output);
+  const lines = chunks.join('').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(lines[0].result.isError, true);
+  assert.equal(lines[1].id, 2);
+  assert.ok(Array.isArray(lines[1].result.tools));
+});
