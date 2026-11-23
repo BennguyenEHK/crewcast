@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderWatch } from '../src/dispatch/watch-render.js';
+import { renderWatch, renderFeed } from '../src/dispatch/watch-render.js';
 import type { WatchView } from '../src/dispatch/run-watch.js';
+import type { ActivityEvent } from '../src/activity.js';
 
 test('renders a header and a line per worker, with status markers and a truncated latest message', () => {
   const view: WatchView = {
@@ -19,4 +20,16 @@ test('renders a header and a line per worker, with status markers and a truncate
   assert.match(out, /done/);        // ended row's latest message
   assert.match(out, /ENOENT/);      // failed row shows the error
   assert.ok(out.includes('…'), 'the 100-char latest is truncated');
+});
+
+test('renderFeed lists one summary per event, oldest first with a time prefix (newest at the bottom)', () => {
+  const events: ActivityEvent[] = [
+    { kind: 'decided', ts: '2026-11-22T10:00:00.000Z', mode: 'team', skills: ['tdd'], branch: 'feat/x', task: 'x' },
+    { kind: 'dispatch', ts: '2026-11-22T10:00:05.000Z', run: 'r1', units: [{ unit: 'auth', engine: 'codex' }] },
+  ];
+  const out = renderFeed(events);
+  assert.match(out, /decided.*team.*feat\/x/);
+  assert.match(out, /dispatched.*codex.*auth/);
+  assert.ok(out.indexOf('dispatched') > out.indexOf('decided'), 'newest (dispatch) is below');
+  assert.match(out, /10:00:00/); // time prefix from the ISO ts
 });

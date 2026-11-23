@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Cli } from '../src/cli.js';
 import { Mailbox } from '../src/mailbox.js';
+import { ActivityLog } from '../src/activity.js';
 
 async function seedRun(home: string, run: string, startedAt: string) {
   await mkdir(join(home, 'runs', run), { recursive: true });
@@ -18,7 +19,7 @@ async function seedRun(home: string, run: string, startedAt: string) {
   await writeFile(join(home, 'runs', run, 'run.json'), JSON.stringify(state), 'utf8');
 }
 
-type Internals = { watchOnce(run: string): Promise<string>; latestRun(): Promise<string | undefined> };
+type Internals = { watchOnce(run?: string): Promise<string>; latestRun(): Promise<string | undefined> };
 
 test('watchOnce renders a frame naming the workers', async () => {
   const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-'));
@@ -47,13 +48,40 @@ test('watch with an explicit run id that does not exist says so, exit 1 (not a r
   }
 });
 
-test('watch with no runs prints a clear message and exits 0', async () => {
-  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch2-'));
+test('watchOnce shows the activity feed even with no runs (never "no runs")', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-feed-'));
   try {
-    const lines: string[] = [];
-    const code = await new Cli(l => lines.push(l), { env: { CREWCAST_HOME: home }, cwd: home }).run(['watch']);
-    assert.equal(code, 0);
-    assert.ok(lines.some(l => /no runs/i.test(l)), lines.join('\n'));
+    await new ActivityLog(home).append({ kind: 'decided', ts: '2026-11-22T10:00:00.000Z', mode: 'solo', skills: [], branch: 'keep', task: 'x' });
+    const cli = new Cli(() => {}, { env: { CREWCAST_HOME: home }, cwd: home });
+    const frame = await (cli as unknown as Internals).watchOnce(undefined);
+    assert.match(frame, /decided.*solo/);
+    assert.ok(!/no runs/i.test(frame), frame);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('watchOnce shows the feed above the now block when a run resolves', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-both-'));
+  try {
+    await new ActivityLog(home).append({ kind: 'decided', ts: '2026-11-22T10:00:00.000Z', mode: 'team', skills: [], branch: 'feat/x', task: 'x' });
+    await seedRun(home, 'r1', new Date().toISOString());
+    const cli = new Cli(() => {}, { env: { CREWCAST_HOME: home }, cwd: home, alive: pid => pid === 100 });
+    const frame = await (cli as unknown as Internals).watchOnce('r1');
+    assert.match(frame, /decided.*team/);   // feed line
+    assert.match(frame, /codex/);            // now-block worker table
+    assert.ok(frame.indexOf('crewcast · run r1') > frame.indexOf('decided'), 'feed is above the now block');
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('watchOnce with no activity and no run says "nothing yet"', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-empty-'));
+  try {
+    const cli = new Cli(() => {}, { env: { CREWCAST_HOME: home }, cwd: home });
+    const frame = await (cli as unknown as Internals).watchOnce(undefined);
+    assert.match(frame, /nothing yet/i);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

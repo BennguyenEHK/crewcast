@@ -30,7 +30,7 @@ import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
 import { resolveLauncher } from './dispatch/launcher.js';
 import { RunWatch } from './dispatch/run-watch.js';
-import { renderWatch } from './dispatch/watch-render.js';
+import { renderWatch, renderFeed } from './dispatch/watch-render.js';
 import { ActivityLog } from './activity.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
@@ -223,15 +223,12 @@ export class Cli {
       return 1;
     }
     const given = parsed.positionals[0];
-    const run = given ?? (await this.latestRun());
-    if (!run) {
-      this.out('no runs yet — start a team task, approve its plan, then watch');
-      return 0;
-    }
     if (given && !(await stat(join(this.crewcastHome(), 'runs', given, 'run.json')).then(() => true, () => false))) {
       this.out(`run not found: ${given}`);
       return 1;
     }
+    // No early exit when there are no runs: the feed is live, so watch keeps looping and fills in as crewcast acts.
+    const run = given ?? (await this.latestRun());
     const interval = Math.max(200, Number(parsed.values.interval) || 1000);
     for (;;) {
       this.out('\x1b[2J\x1b[H' + (await this.watchOnce(run))); // clear screen + home, then the frame
@@ -239,10 +236,17 @@ export class Cli {
     }
   }
 
-  private async watchOnce(run: string): Promise<string> {
+  // One frame: the activity feed (always) above the "now" block (only when a run resolves). Empty everything → "nothing yet".
+  private async watchOnce(run?: string): Promise<string> {
     const crewHome = this.crewcastHome();
-    const watch = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
-    return renderWatch(await watch.view(run));
+    const feed = renderFeed(await new ActivityLog(crewHome).recent(12));
+    let now = '';
+    if (run) {
+      const watch = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
+      now = renderWatch(await watch.view(run));
+    }
+    if (!feed && !now) return 'nothing yet — enter a prompt in Claude Code';
+    return [feed, now].filter(Boolean).join('\n\n');
   }
 
   // The most recently started run under <crewHome>/runs, by run.json mtime. undefined if there are none.
