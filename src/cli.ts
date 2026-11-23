@@ -22,9 +22,14 @@ import { CatalogTool } from './mcp/catalog-tool.js';
 import { PostMessageTool } from './mcp/post-message-tool.js';
 import { ReadMessagesTool } from './mcp/read-messages-tool.js';
 import { Mailbox } from './mailbox.js';
-import { EngineCatalog } from './engines/catalog.js';
+import { spawn } from 'node:child_process';
+import { EngineCatalog, type Engine } from './engines/catalog.js';
 import { parsePlan } from './plan.js';
 import { PlanAllocator } from './decide/allocate.js';
+import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
+import { WorktreeManager } from './worktree.js';
+import { DispatchTool } from './mcp/dispatch-tool.js';
+import { RunStatusTool } from './mcp/run-status-tool.js';
 import { Setup } from './install/setup.js';
 import { Doctor } from './install/doctor.js';
 import { Uninstall } from './install/uninstall.js';
@@ -57,28 +62,33 @@ function defaultWarm(baseUrl: string): (model: string) => Promise<void> {
   };
 }
 
-interface Settings { hooks?: Record<string, { hooks: { type: string; command: string }[] }[]>; [k: string]: unknown }
+interface HookEntry { matcher?: string; hooks: { type: string; command: string }[] }
+interface Settings { hooks?: Record<string, HookEntry[]>; [k: string]: unknown }
 async function readSettings(path: string): Promise<Settings> {
   try { return JSON.parse(await readFile(path, 'utf8')) as Settings; } catch { return {}; }
 }
-// Adds the crewcast UserPromptSubmit hook to ~/.claude/settings.json, idempotently. Returns the path edited (recorded for reversal).
+const isCrewcast = (e: HookEntry): boolean => e.hooks?.some(h => h.command === 'crewcast hook');
+// Registers the crewcast hooks in ~/.claude/settings.json, idempotently: UserPromptSubmit (the shadow decision, §7.2) and
+// PostToolUse/ExitPlanMode (dispatch on plan approval, §7.14). Returns the path edited (recorded for reversal).
 async function installHook(userHome: string): Promise<string> {
   const path = join(userHome, '.claude', 'settings.json');
   await mkdir(dirname(path), { recursive: true });
   const settings = await readSettings(path);
   settings.hooks ??= {};
-  const list = (settings.hooks.UserPromptSubmit ??= []);
-  if (!list.some(e => e.hooks?.some(h => h.command === 'crewcast hook'))) {
-    list.push({ hooks: [{ type: 'command', command: 'crewcast hook' }] });
-  }
+  const ups = (settings.hooks.UserPromptSubmit ??= []);
+  if (!ups.some(isCrewcast)) ups.push({ hooks: [{ type: 'command', command: 'crewcast hook' }] });
+  const post = (settings.hooks.PostToolUse ??= []);
+  if (!post.some(e => e.matcher === 'ExitPlanMode' && isCrewcast(e))) post.push({ matcher: 'ExitPlanMode', hooks: [{ type: 'command', command: 'crewcast hook' }] });
   await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf8');
   return path;
 }
 async function removeHook(path: string): Promise<void> {
   const settings = await readSettings(path);
-  const list = settings.hooks?.UserPromptSubmit;
-  if (!list) return;
-  settings.hooks!.UserPromptSubmit = list.filter(e => !e.hooks?.some(h => h.command === 'crewcast hook'));
+  if (!settings.hooks) return;
+  for (const event of Object.keys(settings.hooks)) {
+    settings.hooks[event] = settings.hooks[event].filter(e => !isCrewcast(e));
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
   await writeFile(path, JSON.stringify(settings, null, 2) + '\n', 'utf8');
 }
 
@@ -103,7 +113,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; hookTimeoutMs: number }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -254,7 +264,8 @@ export class Cli {
   private async buildHookOutput(payload: string): Promise<string> {
     let prompt: string;
     try {
-      const p = JSON.parse(payload) as { prompt?: unknown };
+      const p = JSON.parse(payload) as { prompt?: unknown; tool_name?: unknown };
+      if (p.tool_name === 'ExitPlanMode') return this.dispatchOnPlanApproval(); // §7.14: plan approved → start the crew
       prompt = typeof p.prompt === 'string' ? p.prompt : '';
     } catch {
       return '';
@@ -286,6 +297,29 @@ export class Cli {
     }
   }
 
+  // Fired by a PostToolUse hook on ExitPlanMode (§7.14): read the project plan.md and dispatch the crew. Fail-open — a missing plan or a dispatch error just lets the approval proceed.
+  private async dispatchOnPlanApproval(): Promise<string> {
+    try {
+      const { cwd } = this.paths();
+      const planPath = join(cwd, 'plan.md');
+      await readFile(planPath, 'utf8'); // no plan.md → do nothing rather than report a phantom run
+      const dispatch = this.deps.dispatchPlan ?? (await this.realDispatchPlan());
+      const run = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      await dispatch(planPath, run);
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `crewcast: dispatched team run ${run} from plan.md.` } });
+    } catch {
+      return '';
+    }
+  }
+
+  private async realDispatchPlan(): Promise<(plan: string, run: string) => Promise<RunState>> {
+    const { home, cwd } = this.paths();
+    const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+    const crewHome = this.crewcastHome();
+    const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+    return this.buildDispatch(home, cwd, crewHome, baseUrl, skills, new Mailbox(crewHome)).dispatch;
+  }
+
   private async mcp(): Promise<number> {
     const server = await this.buildMcpServer();
     await server.serve(process.stdin, process.stdout);
@@ -302,13 +336,59 @@ export class Cli {
     const crewHome = this.crewcastHome();
     const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
     const mailbox = new Mailbox(crewHome);
+    const { dispatch, status } = this.buildDispatch(home, cwd, crewHome, baseUrl, skills, mailbox);
     const tools = [
       new DecideTool({ ask, skills, git, home: crewHome, baseUrl, defaultModel: 'kev:4b-q4_K_M' }),
       new CatalogTool({ skills }),
-      new PostMessageTool({ mailbox }),
-      new ReadMessagesTool({ mailbox }),
+      new PostMessageTool({ mailbox, defaultRun: () => process.env.CREWCAST_RUN }),
+      new ReadMessagesTool({ mailbox, defaultRun: () => process.env.CREWCAST_RUN }),
+      new DispatchTool({ dispatch, newRun: () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }),
+      new RunStatusTool({ status }),
     ];
     return new McpServer({ tools, serverInfo: { name: 'crewcast', version } });
+  }
+
+  // Wires the allocate→dispatch pipeline with real defaults: spawn (no shell; closes stdin for the agy Windows hang), skill text from SKILL.md, per-run env.
+  private buildDispatch(home: string, cwd: string, crewHome: string, baseUrl: string, skills: Skill[], mailbox: Mailbox): {
+    dispatch: (plan: string, run: string) => Promise<RunState>;
+    status: (run: string) => Promise<RunStatus>;
+  } {
+    const index = new SkillIndex({ baseUrl, home: crewHome });
+    const skillText = async (names: string[]): Promise<string> => {
+      const texts = await Promise.all(names.map(async n => {
+        const s = skills.find(x => x.name === n);
+        try { return s ? await readFile(s.path, 'utf8') : ''; } catch { return ''; }
+      }));
+      return texts.filter(Boolean).join('\n\n');
+    };
+    const dispatcher = new Dispatcher({
+      worktrees: new WorktreeManager({ repoRoot: cwd }),
+      mailbox,
+      runsHome: crewHome,
+      spawn: (bin, args, opts) => new Promise(resolve => {
+        // Resolve on 'spawn' or 'error' so a launch failure (e.g. a Windows .cmd shim unlaunchable without a shell) is a recorded
+        // worker, never an uncaught exception that would crash the long-lived MCP server.
+        const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
+        child.on('error', e => resolve({ pid: null, error: (e as Error).message }));
+        child.on('spawn', () => {
+          child.stdin?.end(); // close stdin so agy -p does not hang on Windows
+          child.unref();
+          resolve({ pid: child.pid ?? null });
+        });
+      }),
+      skillText,
+      mcpConfig: run => ({ CREWCAST_RUN: run }),
+    });
+    const dispatch = async (plan: string, run: string): Promise<RunState> => {
+      let markdown = plan;
+      try { markdown = await readFile(plan, 'utf8'); } catch { /* not a path → treat `plan` as the markdown itself */ }
+      let engines: Engine[] = await EngineCatalog.load(crewHome);
+      if (engines.every(e => e.installed === undefined)) engines = await new EngineCatalog({ run: this.deps.run }).detect();
+      const pickSkills = this.deps.pickSkills ?? (async (text: string) => (await index.top(text, skills, 3)).map(s => s.name));
+      const alloc = await new PlanAllocator({ engines, leadEngine: 'claude', pickSkills }).allocate(parsePlan(markdown));
+      return dispatcher.dispatch(alloc, { run, repoRoot: cwd, engines });
+    };
+    return { dispatch, status: run => dispatcher.status(run) };
   }
 
   private paths(): { home: string; cwd: string } {

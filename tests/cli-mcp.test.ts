@@ -21,7 +21,7 @@ test('crewcast mcp server exposes decide, catalog and the mailbox tools', async 
   try {
     const server = await build(root);
     const res = (await server.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })) as { result: { tools: { name: string }[] } };
-    assert.deepEqual(res.result.tools.map(t => t.name).sort(), ['catalog', 'decide', 'post_message', 'read_messages']);
+    assert.deepEqual(res.result.tools.map(t => t.name).sort(), ['catalog', 'decide', 'dispatch', 'post_message', 'read_messages', 'run_status']);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
