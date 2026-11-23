@@ -85,3 +85,13 @@ test('a tool that throws becomes isError content, and serve keeps serving', asyn
   assert.equal(lines[1].id, 2);
   assert.ok(Array.isArray(lines[1].result.tools));
 });
+
+test('serve tolerates a leading BOM on the first message (some clients prepend one)', async () => {
+  const out: string[] = [];
+  const output = new Writable({ write(chunk, _e, cb) { out.push(chunk.toString()); cb(); } });
+  const input = Readable.from(['﻿{"jsonrpc":"2.0","id":1,"method":"initialize"}\n']);
+  await new McpServer({ tools: [] }).serve(input, output as unknown as NodeJS.WritableStream);
+  const res = JSON.parse(out.join('').trim()) as { id: number; result?: unknown; error?: unknown };
+  assert.equal(res.id, 1);
+  assert.ok(res.result && !res.error, out.join('')); // a BOM must not turn initialize into a parse error
+});

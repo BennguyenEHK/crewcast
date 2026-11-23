@@ -38,13 +38,17 @@ So Phase 2 has two finish lines:
 
 **Vendor-fact research (2026-11-22):** headless invocation is confirmed for Codex (`codex exec`), Copilot (`copilot -p`), and Antigravity (`agy -p`, which replaced the retired Gemini CLI — see PR #9). Skills reach workers via the §7.8 prompt-injection fallback (worker skill-folder paths are unconfirmed, so this is the safe path for all of them). The plan-mode trigger is `PostToolUse` on `ExitPlanMode`.
 
-### Live acceptance gate — owner's machine (what unit tests can't prove)
-1. **Install `agy`** (`winget install --id Google.AntigravityCLI`) and the other worker CLIs you want; run `crewcast engines`/`doctor` to detect them.
-2. **Windows shim launch (C1 residual):** the default `spawn` is `shell:false` (for security — the prompt is untrusted). An npm `.cmd`/`.ps1` CLI shim will not launch this way; it currently records a *failed worker* (no crash). Fix needs your actual install: resolve the shim to its node target and spawn that directly (keep `shell:false`).
-3. **Per-worker MCP registration (I1 residual):** a spawned worker has `CREWCAST_RUN` in its env, but crewcast's MCP server must also be *registered into that worker CLI's per-run config* (vendor-specific) so the worker has a `post_message` tool.
-4. **`ExitPlanMode` hook firing:** confirm a `PostToolUse`/`ExitPlanMode` hook actually fires on your Claude Code version.
-5. **copilot `--allow-all-tools` (I5):** confirm it isn't effectively permission-off (§3); workers run in their own worktree as a mitigant.
-6. **The §8 gate:** a trivial two-unit `plan.md` (one Codex, one Antigravity), approve the plan, watch both workers post progress to the mailbox mid-task.
+### Done on the owner's machine (2026-11-22, verified against the real install)
+- **All five CLIs detected:** claude 2.1.330, agy 1.5.14, codex 0.166.0, copilot 1.0.105, kiro 3.5.0.
+- **C1 — worker launch (PR #11):** `resolveLauncher` resolves an npm `.cmd`/`.ps1` shim (codex, copilot) to `node <cli.js>` and spawns it with `shell:false`; real `.exe`s (agy, kiro-cli) launch directly. The untrusted prompt never reaches a shell. Verified: all four resolve to a launchable command that exists on disk.
+- **I1 — worker mailbox (PR #12):** `setup` registers crewcast's MCP into every installed CLI (`<cli> mcp add crewcast -- crewcast mcp`; syntax confirmed per CLI), so each worker has `post_message`.
+
+### Live acceptance gate — still the owner's to run
+1. **Make `crewcast` a global command** so the registered `crewcast mcp` resolves: `npm i -g .` (or `npm link`) in `D:\dev\crewcast`. (Workers launch `crewcast mcp`, which must be on PATH.)
+2. **`crewcast setup`** — registers MCP into all installed CLIs, installs the hook, copies skills, pre-warms. Idempotent; `crewcast uninstall` reverses it exactly.
+3. **`ExitPlanMode` hook firing:** confirm a `PostToolUse`/`ExitPlanMode` hook fires on your Claude Code version.
+4. **Worker non-interactive approvals (recipe tuning):** confirm each writing worker runs without hanging on a tool prompt *and* without being permission-off (§3) — agy has `--mode accept-edits|auto`, codex uses `--sandbox workspace-write`, copilot `--allow-all-tools` (I5: confirm it's worktree-scoped, not global). Tune the recipes from what the live run shows.
+5. **The §8 gate:** a two-unit `plan.md` (one Codex, one Antigravity), approve the plan, watch both workers post progress to the mailbox mid-task.
 
 ## Open calls for the owner
 
