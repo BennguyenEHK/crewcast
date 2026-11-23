@@ -35,7 +35,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string> }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -95,20 +95,27 @@ export class Cli {
       return '';
     }
     if (!prompt.trim() || prompt.trim().split(/\s+/).length < 8) return '';
+    const budget = this.deps.hookTimeoutMs ?? 2000; // §11: the hook never adds more than ~2 s to the prompt
     try {
       const { home, cwd } = this.paths();
       const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
-      const client = new SystemOneClient({ baseUrl, timeoutMs: 2000 });
+      const client = new SystemOneClient({ baseUrl, timeoutMs: budget });
       const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
       const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
       const git = await new GitInspector().state(cwd);
-      const index = new SkillIndex({ baseUrl, home: this.crewcastHome() });
-      const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
-      const picked = rec.agents[0]?.skills.join(', ') || 'none';
-      const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
-      let block = `crewcast (shadow): mode=${rec.mode}; skills: ${picked}; branch: ${branch}.`;
-      if (rec.mode === 'team') block += ' You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill §7.13).';
-      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } });
+      const index = new SkillIndex({ baseUrl, home: this.crewcastHome(), timeoutMs: budget });
+      const work = (async () => {
+        const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
+        const picked = rec.agents[0]?.skills.join(', ') || 'none';
+        const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
+        let block = `crewcast (shadow): mode=${rec.mode}; skills: ${picked}; branch: ${branch}.`;
+        if (rec.mode === 'team') block += ' You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill §7.13).';
+        return JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } });
+      })();
+      void work.catch(() => {}); // if the deadline wins, work's later self-abort must not become an unhandled rejection
+      // Hard deadline: if decide (embed or kev) is slow, add nothing rather than stall the prompt. The slow calls self-abort at `budget`.
+      const deadline = new Promise<string>(r => { const t = setTimeout(() => r(''), budget); (t as { unref?: () => void }).unref?.(); });
+      return await Promise.race([work, deadline]);
     } catch {
       return ''; // fail-open: any backend error leaves the prompt untouched
     }

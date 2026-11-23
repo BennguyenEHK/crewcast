@@ -10,13 +10,15 @@ export class SkillIndex {
   private readonly fetchFn: typeof fetch;
   // mxbai-embed-large wants this on the query only; skills (documents) stay unprefixed. Override if the model changes.
   private readonly queryPrefix: string;
+  private readonly timeoutMs: number;
 
-  constructor(opts: { baseUrl: string; model?: string; home: string; fetchFn?: typeof fetch; queryPrefix?: string }) {
+  constructor(opts: { baseUrl: string; model?: string; home: string; fetchFn?: typeof fetch; queryPrefix?: string; timeoutMs?: number }) {
     this.baseUrl = opts.baseUrl;
     this.model = opts.model ?? 'mxbai-embed-large';
     this.home = opts.home;
     this.fetchFn = opts.fetchFn ?? fetch;
     this.queryPrefix = opts.queryPrefix ?? 'Represent this sentence for searching relevant passages: ';
+    this.timeoutMs = opts.timeoutMs ?? 30_000; // the hook passes a short budget so a cold embed can't stall the prompt
   }
 
   // On any embed failure (model not pulled, Ollama down, bad response) falls back to the keyword shortlist. Never throws.
@@ -52,7 +54,7 @@ export class SkillIndex {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: this.model, input: inputs }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) throw new Error(`embed HTTP ${res.status}`);
     const body = (await res.json()) as { embeddings?: unknown };

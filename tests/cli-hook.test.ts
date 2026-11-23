@@ -58,3 +58,25 @@ test('decide error (ask throws) → empty output', async () => {
   const ask = async () => { throw new BackendError('ollama_unreachable', 'down'); };
   await withCli(ask, async cli => assert.equal(await build(cli, JSON.stringify({ prompt: 'fix the login redirect bug after the session expires' })), ''));
 });
+
+test('timeout BackendError → empty output', async () => {
+  const ask = async () => { throw new BackendError('timeout', 'slow'); };
+  await withCli(ask, async cli => assert.equal(await build(cli, JSON.stringify({ prompt: 'fix the login redirect bug after the session expires' })), ''));
+});
+
+test('a slow decide → empty within the hook budget (no long stall)', { timeout: 2000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-hook-'));
+  try {
+    const cwd = join(root, 'proj');
+    await mkdir(cwd);
+    const env = { USERPROFILE: join(root, 'home'), CREWCAST_HOME: join(root, 'crewcast') };
+    const ask = (_r: SystemOneRequest) => new Promise<SystemOneResponse>(res => setTimeout(() => res({ model: 'x', answers: ANSWERS }), 400));
+    const cli = new Cli(() => {}, { ask, env, cwd, hookTimeoutMs: 50 });
+    const start = Date.now();
+    assert.equal(await build(cli, JSON.stringify({ prompt: 'fix the login redirect bug after the session expires' })), ''); // 50ms deadline beat the 400ms decide
+    assert.ok(Date.now() - start < 300);
+    await new Promise(r => setTimeout(r, 450)); // let the slow ask settle so no promise dangles
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
