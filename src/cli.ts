@@ -123,6 +123,10 @@ const USAGE = [
   // `mcp` and `hook` are internal — a client (Claude Code / a worker) runs them, never a person — so they are not listed.
 ];
 
+// How many embedding-shortlisted skills the model is asked to rate per decision (§7.8). The catalog is large, so a tight
+// window drops genuinely-relevant skills before the model ever sees them; 12 is wide enough to include them without flooding.
+const SHORTLIST_K = 12;
+
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
@@ -385,7 +389,7 @@ export class Cli {
           const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
           const git = await new GitInspector().state(cwd);
           const index = new SkillIndex({ baseUrl, home: this.crewcastHome(), timeoutMs: budget });
-          const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
+          const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s, SHORTLIST_K) }).decide(prompt);
           const picked = rec.agents[0]?.skills.join(', ') || 'none';
           const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
           await activity.append({ kind: 'decided', ts: new Date().toISOString(), mode: rec.mode, skills: rec.agents[0]?.skills ?? [], branch, task: redacted });
@@ -556,7 +560,7 @@ export class Cli {
 
     let rec;
     try {
-      rec = await new Decider({ ask, skills, git, model, shortlist: (t, s) => index.top(t, s) }).decide(task);
+      rec = await new Decider({ ask, skills, git, model, shortlist: (t, s) => index.top(t, s, SHORTLIST_K) }).decide(task);
     } catch (err) {
       if (!(err instanceof BackendError)) throw err;
       this.backendLine(err, baseUrl, model);
@@ -644,7 +648,7 @@ export class Cli {
 
     let report: Report;
     try {
-      report = await new Evaluator({ cwd }).run(file, { ask, skills, model, shortlist: (t, s) => index.top(t, s) });
+      report = await new Evaluator({ cwd }).run(file, { ask, skills, model, shortlist: (t, s) => index.top(t, s, SHORTLIST_K) });
     } catch (err) {
       if (err instanceof BackendError) {
         this.backendLine(err, baseUrl, model);
