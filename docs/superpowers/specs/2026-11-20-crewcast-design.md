@@ -395,9 +395,11 @@ Known recipes from the owner's setup, all to be verified by the builder:
 - **Independent checks.** A model from a different company checks every change, never the worker that wrote it.
 - **The subscriptions do the heavy work.**
 
-**Reviewer limits (checked 2026-11-21; verify on the user's account):**
-- CodeRabbit CLI installs natively on Windows (PowerShell installer). Its free tier allows about 3 CLI reviews per hour; sources differ, and some say 2. So it gets one full review per finished task, not one per fix round.
-- Copilot does the security review and the quick re-checks after fixes.
+**Reviewer count: one by default, a second only when it earns its cost (owner's decision, 2026-11-22).** The old "two reviewers always" is wasteful on the owner's free tiers. The number of reviewers is configurable (a rules setting); the default is:
+- **Primary, always: CodeRabbit CLI** — the one full review of each finished task (for a multi-unit team task, one review of the merged result, not one per unit). CLI code reviews are free, and On-Demand reviews are billed $0.00 until 2026-09-21; the rolling per-developer rate limit is fine for a solo user. It is purpose-built and gives structured findings (`--agent`).
+- **Second, conditional + opt-in: Copilot security pass** — only when the task touches a risk area (auth / db / payments / secrets / deploy; the rules already gate this), because the Copilot free plan is ~50 premium requests/month and from 2026-06-01 a code review costs a 13× multiplier (~3–4 reviews/month). So Copilot is the exception for genuine security, never a routine double-check.
+- Rationale: the captain never reads code (§7.13), so review is the only code-level check — but a dedicated reviewer (CodeRabbit) plus the captain's cheap pass/fail test check covers the routine case; a second reviewer has diminishing returns and real free-tier cost. Keep the second exactly for security, exactly when risk is flagged.
+- Numbers above were checked 2026-11-22; verify on the owner's account.
 
 **How it is enforced:** crewcast cannot force a model's behaviour. These rules live in the crewcast skill, and the hook repeats the one-line captain rule on every team task (§7.2).
 
@@ -490,6 +492,7 @@ The captain names no CLI, model, skill, plugin or flag. Naming them would spend 
 - **Team flow is plan-first (§7.14).** The captain writes a spec, then `plan.md` with the work units only (description, files, depends). crewcast allocates the crew from the plan.
 - **Plan mode is the gate.** The captain plans in plan mode; its approval (`ExitPlanMode`) triggers dispatch, wired by a hook.
 - **crewcast allocates per unit, from the plan:** agent grouping (from `depends:`), skills (per-unit embedding), CLI, model, effort, plugins, MCP servers, and flags/arguments. Flags always from the rules table, never a model (§7.6).
+- **Review path: one reviewer by default, a second only on risk (§7.13).** CodeRabbit CLI is the one full review per finished task (free CLI reviews; one review of the merged result for a multi-unit task). The Copilot security pass is conditional and opt-in — only when the task hits a risk area — because the Copilot free plan is ~50 premium requests/month and a code review costs 13× from 2026-06-01. The reviewer count is configurable.
 - **Agent count comes from the plan's dependencies**, not from model independence questions (§7.3).
 - **Skill picking is embedding-led.** A decision model is likely dropped for skills, since per-unit picking should cover multi-skill; final call pending a per-unit check.
 
