@@ -159,10 +159,12 @@ The decision model is asked a fixed set of concrete questions. Each answer is on
 - score 4–5, or any `risk_area` other than none → Claude leads, with workers for the independent parts;
 - Gemini work is always sequential.
 
-**Number of agents** is not a model guess:
-1. Get the work units. Use the user's bullet list when there is one (split by plain parsing). Otherwise use one short Claude planning call, which is the only token cost and is shown as such.
-2. For each pair of units, ask the decision model one yes/no question: "independent: no shared files, and B does not need A's output?" Cap at 6 units.
+**Number of agents** is not a model guess. It comes from the captain's plan (§7.14):
+1. The captain writes the work units in `plan.md` and states each unit's dependencies (`depends:`). The captain already knows them, so crewcast never asks a model.
+2. crewcast groups the units by those dependencies: independent units run in parallel, dependent units chain.
 3. Agents = number of independent groups, capped by each engine's limit.
+
+(This replaces the earlier pair-independence yes/no questions: the captain states the dependencies, so a model need not re-derive them.)
 
 **Model, effort and mode in v1:**
 - a fixed default per engine from the engine catalog;
@@ -234,11 +236,13 @@ Built at setup and refreshed by `doctor`. Stored in `~/.crewcast/`.
 - **MCP servers:** chosen per **server**, never per tool (servers can have 200+ tools; the agent picks tools itself once connected). CLI configs hold only how to start a server, not what it does. So `setup`/`doctor` start each server once, read its tool list, and save a one-line description (user-editable) in `~/.crewcast/mcp-catalog.json`. Servers that need a login, or fail to start, get a description from their name plus a "needs description" flag shown in `doctor`. This is the one catalog that is stored, not read live.
 - **Plugins:** not chosen as a whole. A plugin's skills are in the skill list and its MCP servers in the MCP list; choosing those covers it.
 - **CLIs, models, effort, flags:** crewcast's own engine catalog (§7.6), with descriptions written by us. Flags are facts from vendor docs, checked by `doctor`, never chosen by the model. In v1, rules choose from it, not the model.
-- **Shortlist before asking the model.** A user can have 300+ skills; the owner already does. **Two layers (2026-11-21):**
-1. A tiny embedding model (`all-minilm`, 45 MB, through Ollama's `/api/embed`) picks the **8** skills closest to the task.
-2. The decision model (**kev 4B**) answers one yes/no question per skill on those 8.
-
-If the embedding model is missing, the keyword prefilter is the fallback. Each shortlisted skill gets its own yes/no question, because a `choice` allows only 2–26 options and skills are a pick-several, not a pick-one.
+- **Shortlist by embedding (updated 2026-11-22).** A user can have 300+ skills; the owner has 136.
+1. The embedding model is **`mxbai-embed-large`** (through Ollama's `/api/embed`; the task carries mxbai's query prefix). It ranks every skill's `name + description` against the text by cosine. On the phase-0 challenge it beat `all-minilm` and `nomic-embed-text` (recall@8 0.908).
+2. The final pick is made one of two ways, both measured in phase 0 against all 136 skills:
+   - **embedding only** — keep the skills above a cosine threshold (≈0.55), capped at 3. Overall skills agreement **0.822**, and it correctly picks nothing when nothing fits.
+   - **decision model (kev 4B)** — one yes/no per shortlisted skill. Overall **0.795**.
+   embedding-only wins overall and drops a whole model (no 2.7 GB download). kev wins only on multi-skill (0.53 vs 0.40). The plan-first flow (§7.14) picks skills **per work unit**, which is embedding's strength and should remove kev's only edge — so the decision model is likely dropped for skills; final call pending a per-unit check.
+- If the embedding model is missing, the keyword prefilter is the fallback.
 
 ### 7.6 Engine catalog
 
@@ -359,8 +363,8 @@ Known recipes from the owner's setup, all to be verified by the builder:
 **When it applies:** when the decision record says `mode: team`. In `solo` mode there is no team, so the lead does the task itself (§1).
 
 **What the captain does:**
-1. **Plan.** Read the task and the decision record. Split the work into parts.
-2. **Assign.** Give each part to one worker with a task card: the goal, the files that worker owns, and what "done" means (§7.7).
+1. **Spec, then plan (§7.14).** For a team task, write a short spec (goal, scope, done) for the user to approve. Then, in plan mode, write `plan.md`: the work units, each with its description, its files and its dependencies. Name no CLI, model or skill — crewcast allocates those. The user approves the plan; that approval dispatches the crew.
+2. **Assign is crewcast's job, not the captain's.** From `plan.md`, crewcast allocates each unit's CLI, model, effort, skills, plugins, MCP servers and flags (§7.14). The captain gives each worker only the task card: the goal, its owned files and what "done" means (§7.7).
 3. **Guide with ideas only.** Give design directions, for example "use a queue here" or "keep this in one module". Never give code.
 4. **Read the worker's report.** Read the report only, never the code. Look for these warning signs:
    - The report claims tests, but shows no test output.
@@ -397,11 +401,42 @@ Known recipes from the owner's setup, all to be verified by the builder:
 
 **How it is enforced:** crewcast cannot force a model's behaviour. These rules live in the crewcast skill, and the hook repeats the one-line captain rule on every team task (§7.2).
 
+### 7.14 Team flow: spec → plan → dispatch (owner's proposal, 2026-11-22)
+
+When `mode` is `team`, the work goes through a plan-first flow. The captain plans the work; crewcast allocates the crew. The captain spends tokens only on planning, so crew allocation stays free and local.
+
+**Sequence**
+1. **Spec.** The captain writes a short spec: goal, in-scope, out-of-scope, done criteria. It is for the user, in plain prose. crewcast remembers it in `~/.crewcast/runs/<id>/`.
+2. **The user approves the spec.**
+3. **Plan.** In Claude Code plan mode, the captain writes `plan.md`. Plan mode is the safe container: no code is written until the user approves. The planning skills do the work inside it — `superpowers:brainstorming` for the spec, `solutions-search` for research, `superpowers:writing-plans` for the plan.
+4. **The user approves the plan.** The plan-mode approval (`ExitPlanMode`) is the signal. A `PostToolUse` hook on that event tells crewcast to dispatch. (The exact hook event is verified in Phase 1.)
+5. **Dispatch.** crewcast reads `plan.md`, allocates the crew (below) and starts the workers (§7.7).
+
+**`plan.md` holds the work only — never the crew.** Each unit is one block:
+- a short **description** of the unit;
+- `files:` the files it owns;
+- `depends:` the units it needs first (or none).
+
+The captain names no CLI, model, skill, plugin or flag. Naming them would spend captain tokens on crewcast's job, and would let a model pick a CLI or a flag — which §7.6 forbids for safety.
+
+**From `plan.md`, crewcast allocates per unit (locally, zero tokens):**
+- **agent grouping** — independent units (by `depends:`) run in parallel; dependent units chain (§7.3);
+- **skills** — embed the unit's text and pick per unit (§7.5). Per-unit text is focused, so the multi-skill problem of picking off the raw prompt goes away;
+- **CLI, model, effort** — from the engine catalog and the rules table (§7.6), keyed off the unit's size and risk;
+- **plugins and MCP servers** — from the catalogs (§7.5);
+- **flags / arguments** — from the per-CLI rules table (§7.6). A model never picks a flag, so it can never pick an unsafe one.
+
+**Solo gets a smaller version.** In `solo` mode crewcast decides one more thing: do it now, or plan first.
+- **Immediate** — the captain does the task itself, or hands it to one CLI agent. This is the default.
+- **Needs a plan** — only when the task is clearly large (the `size` signal, or the user asks). Then the captain writes a short plan first, still solo. No extra model for this call.
+
+**Why this is token-optimal.** The captain writes two things: a short spec (for the user) and the work breakdown (for crewcast). It never reasons about which CLI, model or skill goes where. That repeated, expensive reasoning moves to the free local layer — crewcast's whole purpose.
+
 ## 8. Phases
 
 | Phase | Delivers | Done when |
 |---|---|---|
-| **0** | Test set (~50 labelled tasks); `crewcast decide "<task>"` with the Nimble backend; shadow log; `stats` | Agreement on the test set is measured. p95 latency is under 1.5 s. Backend choice is confirmed on the owner's laptop. |
+| **0** | Test set (146 synthetic tasks, all 136 skills); `crewcast decide "<task>"`; shadow log; `stats` | **Done (2026-11-22): go.** mode 1.00, skills 0.795–0.822, p95 ~1.1 s on the owner's laptop. Model `kev:4b-q4_K_M`, embedding `mxbai-embed-large`. See `docs/phase0-results.md`. |
 | **1** | `setup` / `doctor` / `uninstall`; MCP server with `decide` and `catalog`; Claude skill (incl. STE and ship steps); hook; plugin manifest; skill copy to other CLIs | A clean `npm i -g` + `setup` on the owner's laptop gives a working hook and skill, and `uninstall` leaves nothing behind. |
 | **2** | Dispatch, worktrees, mailbox (`dispatch`, `post_message`, `read_messages`, `run_status`) | A two-engine team task runs, and its workers report back mid-task. |
 | **3** | Public release: README, cross-platform checks, CPU-only fallback backend | Works on a machine with no GPU and on macOS or Linux. |
@@ -448,6 +483,15 @@ Known recipes from the owner's setup, all to be verified by the builder:
 - **CodeRabbit CLI is installed (0.9.6).** It runs in `--agent` mode, which gives structured findings for agents.
 - **CLI flags come from a rules table per CLI** (§7.6), never from the model.
 - **Workers keep running on the CLI subscriptions** (Phase 2 CLI dispatch stays). Claude Code's own subagents routed to API-key providers were considered and not chosen: they would make crewcast smaller, but they need paid API keys, and they cannot use the Codex, Gemini, Copilot or Kiro subscriptions.
+
+**Decided by the owner on 2026-11-22**
+- **Phase 0 is go.** mode 1.00 (the phrase rule), skills 0.795–0.822, p95 ~1.1 s on the owner's laptop (`docs/phase0-results.md`).
+- **Embedding model: `mxbai-embed-large`** (query-prefixed), the best of three local models tested.
+- **Team flow is plan-first (§7.14).** The captain writes a spec, then `plan.md` with the work units only (description, files, depends). crewcast allocates the crew from the plan.
+- **Plan mode is the gate.** The captain plans in plan mode; its approval (`ExitPlanMode`) triggers dispatch, wired by a hook.
+- **crewcast allocates per unit, from the plan:** agent grouping (from `depends:`), skills (per-unit embedding), CLI, model, effort, plugins, MCP servers, and flags/arguments. Flags always from the rules table, never a model (§7.6).
+- **Agent count comes from the plan's dependencies**, not from model independence questions (§7.3).
+- **Skill picking is embedding-led.** A decision model is likely dropped for skills, since per-unit picking should cover multi-skill; final call pending a per-unit check.
 
 **Still open (default applies unless the owner changes it)**
 - Shadow-mode takeover threshold: ≥ 90% over ≥ 50 tasks.
