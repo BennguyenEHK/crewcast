@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { EngineCatalog } from '../engines/catalog.js';
 import { InstalledManifest } from './manifest.js';
+import { mcpAddArgs } from './mcp-register.js';
 
 // Idempotent install. Each machine change is recorded only after it succeeds, so uninstall reverses exactly what happened.
 export class Setup {
@@ -23,16 +24,21 @@ export class Setup {
 
     // 1. engine catalog — crewcast's own state, not recorded for reversal
     const cat = new EngineCatalog({ run: this.deps.run });
-    await cat.save(await cat.detect(), this.deps.crewHome);
+    const detected = await cat.detect();
+    await cat.save(detected, this.deps.crewHome);
     steps.push('engine catalog');
 
-    // 2. register the MCP server (skip if already recorded)
+    // 2. register crewcast's MCP server into every installed CLI with a known mcp-add, so each worker has the post_message tool (§7.7).
     const have = await manifest.load();
-    if (!have.some(a => a.kind === 'mcp' && a.server === 'crewcast')) {
-      await this.deps.run('claude', ['mcp', 'add', '--scope', 'user', 'crewcast', '--', 'crewcast', 'mcp']);
-      await manifest.record({ kind: 'mcp', server: 'crewcast' });
+    for (const e of detected) {
+      if (!e.installed) continue;
+      const args = mcpAddArgs(e.id);
+      if (!args) continue;
+      if (have.some(a => a.kind === 'mcp' && a.server === 'crewcast' && (a.bin ?? 'claude') === e.bin)) continue;
+      await this.deps.run(e.bin, args);
+      await manifest.record({ kind: 'mcp', server: 'crewcast', bin: e.bin });
+      steps.push(`mcp register ${e.id}`);
     }
-    steps.push('mcp register');
 
     // 3. install the crewcast skill
     const dest = join(this.deps.userHome, '.claude', 'skills', 'crewcast');
