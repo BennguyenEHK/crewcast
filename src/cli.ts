@@ -369,7 +369,11 @@ export class Cli {
     const budget = this.deps.hookTimeoutMs ?? 2000; // §11: the hook never adds more than ~2 s to the prompt
     const activity = new ActivityLog(this.crewcastHome());
     const redacted = Mailbox.redact(prompt);
-    await activity.append({ kind: 'prompt-received', ts: new Date().toISOString(), task: redacted }); // first, so watch shows the hook fired even if deciding is slow/fails
+    // prompt-received means a human pressed enter. Crewcast-orchestrated prompts (dispatched workers / captain runs
+    // carry CREWCAST_RUN) are crewcast driving itself, so skip prompt-received for them — the decision is still narrated.
+    if (!(this.deps.env ?? process.env).CREWCAST_RUN) {
+      await activity.append({ kind: 'prompt-received', ts: new Date().toISOString(), task: redacted }); // first, so watch shows the hook fired even if deciding is slow/fails
+    }
     try {
       const work = (async () => {
         try {
