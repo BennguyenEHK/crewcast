@@ -67,6 +67,8 @@ function defaultWarm(baseUrl: string): (model: string) => Promise<void> {
 }
 
 // Is a detached worker process still running? signal 0 probes without signalling; ESRCH means gone, anything else (incl. EPERM) means alive.
+// shortcut: a pid can be reused by the OS after the worker exits, which would show a finished worker as running; acceptable for a
+// minutes-long local monitor, upgrade to an exit marker in run.json if it misreports.
 const defaultAlive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code !== 'ESRCH'; }
 };
@@ -114,6 +116,7 @@ const USAGE = [
   '  watch [run] [--interval <ms>]',
   '  setup',
   '  doctor',
+  '  update',
   '  uninstall',
   '  --version',
   // `mcp` and `hook` are internal — a client (Claude Code / a worker) runs them, never a person — so they are not listed.
@@ -139,6 +142,7 @@ export class Cli {
     if (argv[0] === 'engines') return this.engines(argv.slice(1));
     if (argv[0] === 'plan') return this.plan(argv.slice(1));
     if (argv[0] === 'watch') return this.watch(argv.slice(1));
+    if (argv[0] === 'update') return this.update();
     if (argv[0] === 'setup') return this.setup();
     if (argv[0] === 'doctor') return this.doctor();
     if (argv[0] === 'uninstall') return this.uninstall();
@@ -217,10 +221,15 @@ export class Cli {
       USAGE.forEach(line => this.out(line));
       return 1;
     }
-    const run = parsed.positionals[0] ?? (await this.latestRun());
+    const given = parsed.positionals[0];
+    const run = given ?? (await this.latestRun());
     if (!run) {
       this.out('no runs yet — start a team task, approve its plan, then watch');
       return 0;
+    }
+    if (given && !(await stat(join(this.crewcastHome(), 'runs', given, 'run.json')).then(() => true, () => false))) {
+      this.out(`run not found: ${given}`);
+      return 1;
     }
     const interval = Math.max(200, Number(parsed.values.interval) || 1000);
     for (;;) {
@@ -288,6 +297,23 @@ export class Cli {
     const bins = [...new Set(mcp.map(a => (a.kind === 'mcp' ? a.bin ?? 'claude' : '')))].filter(Boolean);
     this.out(`mcp registered with: ${bins.join(', ') || 'none — run crewcast setup'}`);
     return 0;
+  }
+
+  // Pull the latest code and rebuild, in crewcast's own install dir. Explicit (never automatic) — you choose when to update.
+  private async update(): Promise<number> {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const run = this.deps.run ?? defaultRun;
+    try {
+      this.out('git pull…');
+      this.out(await run('git', ['-C', root, 'pull']));
+      this.out('npm run build…');
+      await run('npm', ['--prefix', root, 'run', 'build']);
+      this.out('crewcast updated — restart Claude Code to pick up any changes');
+      return 0;
+    } catch (err) {
+      this.out(`update failed: ${(err as Error).message}`);
+      return 1;
+    }
   }
 
   private async uninstall(): Promise<number> {

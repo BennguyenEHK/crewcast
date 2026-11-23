@@ -34,6 +34,19 @@ test('watchOnce renders a frame naming the workers', async () => {
   }
 });
 
+test('watch with an explicit run id that does not exist says so, exit 1 (not a raw ENOENT)', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch-nf-'));
+  try {
+    await seedRun(home, 'r1', new Date().toISOString());
+    const lines: string[] = [];
+    const code = await new Cli(l => lines.push(l), { env: { CREWCAST_HOME: home }, cwd: home }).run(['watch', 'typo']);
+    assert.equal(code, 1);
+    assert.ok(lines.some(l => /not found|no run/i.test(l) && l.includes('typo')), lines.join('\n'));
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test('watch with no runs prints a clear message and exits 0', async () => {
   const home = await mkdtemp(join(tmpdir(), 'cc-cliwatch2-'));
   try {
