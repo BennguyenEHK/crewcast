@@ -126,7 +126,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; alive: (pid: number) => boolean; hookTimeoutMs: number }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; spawn: (bin: string, args: string[], opts: { cwd: string; env: Record<string, string> }) => Promise<{ pid: number | null; error?: string }>; alive: (pid: number) => boolean; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -452,7 +452,7 @@ export class Cli {
       worktrees: new WorktreeManager({ repoRoot: cwd }),
       mailbox,
       runsHome: crewHome,
-      spawn: async (bin, args, opts) => {
+      spawn: this.deps.spawn ?? (async (bin, args, opts) => {
         // Resolve a Windows npm .cmd/.ps1 shim to `node <cli.js>` so shell:false can launch it (the untrusted prompt never hits a shell, §3).
         const { cmd, prefixArgs } = await resolveLauncher(bin);
         return new Promise(resolve => {
@@ -465,7 +465,7 @@ export class Cli {
             resolve({ pid: child.pid ?? null });
           });
         });
-      },
+      }),
       skillText,
       mcpConfig: run => ({ CREWCAST_RUN: run }),
     });
@@ -476,7 +476,9 @@ export class Cli {
       if (engines.every(e => e.installed === undefined)) engines = await new EngineCatalog({ run: this.deps.run }).detect();
       const pickSkills = this.deps.pickSkills ?? (async (text: string) => (await index.top(text, skills, 3)).map(s => s.name));
       const alloc = await new PlanAllocator({ engines, leadEngine: 'claude', pickSkills }).allocate(parsePlan(markdown));
-      return dispatcher.dispatch(alloc, { run, repoRoot: cwd, engines });
+      const state = await dispatcher.dispatch(alloc, { run, repoRoot: cwd, engines });
+      await new ActivityLog(crewHome).append({ kind: 'dispatch', ts: new Date().toISOString(), run: state.run, units: state.workers.map(w => ({ unit: w.unit, engine: w.engine })) });
+      return state;
     };
     return { dispatch, status: run => dispatcher.status(run) };
   }
