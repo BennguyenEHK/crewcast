@@ -31,6 +31,7 @@ import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher
 import { resolveLauncher } from './dispatch/launcher.js';
 import { RunWatch } from './dispatch/run-watch.js';
 import { renderWatch } from './dispatch/watch-render.js';
+import { ActivityLog } from './activity.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
 import { RunStatusTool } from './mcp/run-status-tool.js';
@@ -349,6 +350,9 @@ export class Cli {
     }
     if (!prompt.trim() || prompt.trim().split(/\s+/).length < 8) return '';
     const budget = this.deps.hookTimeoutMs ?? 2000; // §11: the hook never adds more than ~2 s to the prompt
+    const activity = new ActivityLog(this.crewcastHome());
+    const redacted = Mailbox.redact(prompt);
+    await activity.append({ kind: 'prompt-received', ts: new Date().toISOString(), task: redacted }); // first, so watch shows the hook fired even if deciding is slow/fails
     try {
       const { home, cwd } = this.paths();
       const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
@@ -358,12 +362,18 @@ export class Cli {
       const git = await new GitInspector().state(cwd);
       const index = new SkillIndex({ baseUrl, home: this.crewcastHome(), timeoutMs: budget });
       const work = (async () => {
-        const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
-        const picked = rec.agents[0]?.skills.join(', ') || 'none';
-        const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
-        let block = `crewcast (shadow): mode=${rec.mode}; skills: ${picked}; branch: ${branch}.`;
-        if (rec.mode === 'team') block += ' You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill §7.13).';
-        return JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } });
+        try {
+          const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
+          const picked = rec.agents[0]?.skills.join(', ') || 'none';
+          const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
+          await activity.append({ kind: 'decided', ts: new Date().toISOString(), mode: rec.mode, skills: rec.agents[0]?.skills ?? [], branch, task: redacted });
+          let block = `crewcast (shadow): mode=${rec.mode}; skills: ${picked}; branch: ${branch}.`;
+          if (rec.mode === 'team') block += ' You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill §7.13).';
+          return JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } });
+        } catch (err) {
+          await activity.append({ kind: 'decide-failed', ts: new Date().toISOString(), reason: err instanceof Error ? err.message : 'decide failed' });
+          throw err; // stay fail-open: the race/outer catch still returns '' so the prompt is untouched
+        }
       })();
       void work.catch(() => {}); // if the deadline wins, work's later self-abort must not become an unhandled rejection
       // Hard deadline: if decide (embed or kev) is slow, add nothing rather than stall the prompt. The slow calls self-abort at `budget`.
