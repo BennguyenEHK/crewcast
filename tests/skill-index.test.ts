@@ -92,6 +92,18 @@ test('the embed text includes the SKILL.md body, not just name + description', a
   }
 });
 
+test('warm pre-embeds the catalog so a later top() only embeds the task', async () => {
+  await withSkills(async ({ home, skills }) => {
+    const { fetchFn, calls } = fakeFetch();
+    const index = new SkillIndex({ baseUrl: 'http://x', home, fetchFn });
+    await index.warm(skills);
+    calls.length = 0; // forget the warm embeds
+    await index.top('deploy the app', skills);
+    assert.equal(calls.length, 1); // only the task is embedded — warm already cached the skill vectors
+    assert.match(calls[0][0], /deploy the app$/);
+  });
+});
+
 test('an embed error falls back to the keyword shortlist and never throws', async () => {
   await withSkills(async ({ home, skills }) => {
     const fetchFn = (async () => { throw new Error('ollama down'); }) as unknown as typeof fetch;

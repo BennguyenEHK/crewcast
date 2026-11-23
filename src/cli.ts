@@ -30,7 +30,7 @@ import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
 import { resolveLauncher } from './dispatch/launcher.js';
 import { RunWatch, type WatchView } from './dispatch/run-watch.js';
-import { renderWatch, renderFeed, appendLines, ansiPaint, noPaint, type FeedCursor } from './dispatch/watch-render.js';
+import { appendLines, ansiPaint, noPaint, type FeedCursor, type Paint } from './dispatch/watch-render.js';
 import { ActivityLog } from './activity.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
@@ -232,39 +232,33 @@ export class Cli {
       return 1;
     }
     const interval = Math.max(200, Number(parsed.values.interval) || 1000);
-    const crewHome = this.crewcastHome();
-    const activity = new ActivityLog(crewHome);
-    const watcher = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
-    // Append-only (scrollable): print each new event and each worker status change as it happens, never clearing the
-    // screen, so the terminal keeps the whole history. No early exit on no-runs — the feed is live. Ctrl-C stops it.
-    const paint = process.stdout.isTTY && !process.env.NO_COLOR ? ansiPaint : noPaint; // color only on an interactive terminal
-    let run: string | undefined = given ?? (await this.latestRun());
-    let cursor: FeedCursor = { events: 0, workers: {} };
-    let greeted = false;
+    // Append-only (scrollable): print each new event and worker-status change as it happens, never clearing the screen,
+    // so the terminal keeps the whole history. No early exit on no-runs — the feed is live. Ctrl-C stops it.
+    // NO_COLOR convention: its presence (even empty) disables color; otherwise color only on an interactive terminal.
+    const paint: Paint = process.stdout.isTTY && process.env.NO_COLOR === undefined ? ansiPaint : noPaint;
+    const state: { run?: string; cursor: FeedCursor; greeted: boolean } = { run: given, cursor: { events: 0, workers: {} }, greeted: false };
     for (;;) {
-      if (!given && !run) run = await this.latestRun(); // pick up the first run once it appears
-      const events = await activity.all();
-      let view: WatchView | null = null;
-      if (run) { try { view = await watcher.view(run); } catch { /* run.json missing/mid-write: skip worker lines this tick */ } }
-      const { lines, cursor: next } = appendLines(events, view, cursor, new Date().toISOString().slice(11, 19), paint);
-      cursor = next;
-      if (lines.length) lines.forEach(l => this.out(l));
-      else if (!greeted && cursor.events === 0 && !run) { this.out('nothing yet — enter a prompt in Claude Code'); greeted = true; }
+      for (const line of await this.watchTick(given, state, paint)) this.out(line);
       await new Promise(r => setTimeout(r, interval));
     }
   }
 
-  // One frame: the activity feed (always) above the "now" block (only when a run resolves). Empty everything → "nothing yet".
-  private async watchOnce(run?: string): Promise<string> {
+  // One watch tick, extracted so the loop glue is testable: resolve the run, read the activity log + run view, and return
+  // only the lines to print this tick — new events, a fresh agents block on any worker change, or the "nothing yet" greeting.
+  private async watchTick(given: string | undefined, state: { run?: string; cursor: FeedCursor; greeted: boolean }, paint: Paint): Promise<string[]> {
     const crewHome = this.crewcastHome();
-    const feed = renderFeed(await new ActivityLog(crewHome).recent(12));
-    let now = '';
-    if (run) {
-      const watch = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
-      now = renderWatch(await watch.view(run));
+    if (!given && !state.run) state.run = await this.latestRun(); // pick up the first run once it appears
+    const events = await new ActivityLog(crewHome).all();
+    let view: WatchView | null = null;
+    if (state.run) {
+      const watcher = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
+      try { view = await watcher.view(state.run); } catch { /* run.json missing/mid-write: skip the worker block this tick */ }
     }
-    if (!feed && !now) return 'nothing yet — enter a prompt in Claude Code';
-    return [feed, now].filter(Boolean).join('\n\n');
+    const { lines, cursor } = appendLines(events, view, state.cursor, new Date().toISOString().slice(11, 19), paint);
+    state.cursor = cursor;
+    if (lines.length) return lines;
+    if (!state.greeted && cursor.events === 0 && !state.run) { state.greeted = true; return ['nothing yet — enter a prompt in Claude Code']; }
+    return [];
   }
 
   // The most recently started run under <crewHome>/runs, by run.json mtime. undefined if there are none.
@@ -300,7 +294,19 @@ export class Cli {
       installHook,
     }).run();
     for (const s of res.steps) this.out(`✓ ${s}`);
+    await this.warmSkillIndex(baseUrl); // so the 2 s hook isn't stuck on a cold full-catalog embed it can't finish in budget
     return 0;
+  }
+
+  // Pre-embed the skill catalog into the SkillIndex cache. Best-effort: the hook still falls back to keyword ranking
+  // until warm, and a single later skill edit is a cheap (one-skill) cache miss the hook handles within budget.
+  private async warmSkillIndex(baseUrl: string): Promise<void> {
+    try {
+      const { home, cwd } = this.paths();
+      const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+      await new SkillIndex({ baseUrl, home: this.crewcastHome() }).warm(skills);
+      this.out(`✓ skill index warmed (${skills.length} skills)`);
+    } catch { /* warming is best-effort; never fail setup/update over it */ }
   }
 
   private async doctor(): Promise<number> {
@@ -331,6 +337,7 @@ export class Cli {
       this.out(await run('git', ['-C', root, 'pull']));
       this.out('npm run build…');
       await run('npm', ['--prefix', root, 'run', 'build']);
+      await this.warmSkillIndex(new Config(this.deps.env).ollamaBaseUrl); // re-warm in case a DOC_VERSION bump invalidated the cache
       this.out('crewcast updated — restart Claude Code to pick up any changes');
       return 0;
     } catch (err) {
