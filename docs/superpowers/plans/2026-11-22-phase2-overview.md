@@ -11,8 +11,8 @@ Phase 2 is built as five sub-plans, in this order. Each produces working, tested
 | **2a — mailbox** | MCP tools `post_message(run, from, text)` / `read_messages(run, since)`; one JSONL file per run under `~/.crewcast/runs/<id>/`; secret/key-like redaction on write (§7.7). The two-way channel workers and captain talk over. | §7.7 | No — fakeable | **merged (PR #6)** |
 | **2b — worktree manager** | Create/remove a writer's worktree `<repo>-wt/<engine>-<n>` (own branch, shared history); cleanup order (unlink link → folder → branch); never link `node_modules`; the **file-ownership check** (a worker's changed-file list ⊆ its owned list, §7.7/§7.13). | §7.7 | No — temp git repo | **merged (PR #7)** |
 | **2c — full decide (per-unit allocation)** | Parse `plan.md` work units (`description` / `files:` / `depends:`); per unit, allocate locally and zero-token: grouping (parallel vs chained by `depends`), skills (embed the unit text, §7.5), CLI/model/effort (1b catalog + rules, §7.6), plugins/MCP (§7.5), flags (§7.6), and each writer's owned-files list. Extends the Decider; reuses the 1b catalog. | §7.6, §7.14 | No — fakeable | **merged (PR #8)** |
-| **2d — dispatch + run_status** | MCP tools `dispatch(plan)` and `run_status(run)`. One process per **engine group** (not per agent, §7.7); spawn each worker as a background child with its task card (goal, owned files, done, mailbox run id), its skills (§7.8), its worktree (2b) if it writes, and a per-run MCP config so it can talk back (2a). The file-ownership gate (2b) runs before a merge is offered. | §7.7, §7.13 | **Plumbing: no** (fake spawner). **Acceptance: yes.** | pending |
-| **2e — plan-mode dispatch hook** | The Claude Code hook that fires dispatch when the user approves the plan: verify the exact event (`PostToolUse` on `ExitPlanMode`, §7.14), read `plan.md`, call `dispatch`. Fail-open like the §7.2 hook. | §7.14 | No — payload fixture | pending |
+| **2d — dispatch + run_status** | MCP tools `dispatch(plan)` and `run_status(run)`. A process per **writing unit** (own worktree; see the 2d ruling) + readers grouped per engine; each worker gets its task card (goal, owned files, done, mailbox run id), its skills (§7.8), its worktree (2b) if it writes, and a per-run env. The file-ownership gate (2b) is in `run_status`. | §7.7, §7.13 | **Plumbing: no** (fake spawner). **Acceptance: yes.** | **merged (PR #10)** |
+| **2e — plan-mode dispatch hook** | The Claude Code `PostToolUse`/`ExitPlanMode` hook fires dispatch on plan approval (fail-open, no phantom run on missing plan.md); `installHook` registers it. The exact event firing is a live check. | §7.14 | No — payload fixture | **merged (PR #10)** |
 
 ## The live acceptance gate (only the owner can run it)
 
@@ -32,12 +32,19 @@ So Phase 2 has two finish lines:
 - **Public release** (README, cross-platform, CPU-only fallback) = **Phase 3** (§8).
 - **`crewcast pc`** (PC setup/cleanup/power) = **Phase 4** (§8).
 
-## Status (2026-11-22): paused before 2d/2e
+## Status (2026-11-22): Phase 2 buildable scope COMPLETE — live acceptance gate remains
 
-2a–2c are built, reviewed and merged to main (176/176 tests). Per the owner's choice ("build 2a–2c, pause at 2d"), 2d/2e wait on these **vendor facts** being confirmed before dispatch is built on them:
-- **Other CLIs' skill-folder paths (§7.8)** — Codex (`~/.codex/skills` or `~/.agents/skills`), Gemini (`~/.gemini/skills`), Copilot (`~/.copilot/skills`), Kiro (`~/.kiro/skills` + agent config). The spec says confirm each in the vendor's official docs.
-- **Each CLI's headless invocation** — how to run Codex/Gemini/Copilot/Kiro as a background worker given a task + a per-run MCP config (§7.7).
-- **The Claude Code plan-mode hook event (§7.14)** — is it `PostToolUse` on `ExitPlanMode`, and what payload does it carry? Verify against Claude Code docs, then a live check.
+2a–2e are all built, reviewed and merged to main (188/188 tests). The MCP server exposes six tools: `decide`, `catalog`, `post_message`, `read_messages`, `dispatch`, `run_status`.
+
+**Vendor-fact research (2026-11-22):** headless invocation is confirmed for Codex (`codex exec`), Copilot (`copilot -p`), and Antigravity (`agy -p`, which replaced the retired Gemini CLI — see PR #9). Skills reach workers via the §7.8 prompt-injection fallback (worker skill-folder paths are unconfirmed, so this is the safe path for all of them). The plan-mode trigger is `PostToolUse` on `ExitPlanMode`.
+
+### Live acceptance gate — owner's machine (what unit tests can't prove)
+1. **Install `agy`** (`winget install --id Google.AntigravityCLI`) and the other worker CLIs you want; run `crewcast engines`/`doctor` to detect them.
+2. **Windows shim launch (C1 residual):** the default `spawn` is `shell:false` (for security — the prompt is untrusted). An npm `.cmd`/`.ps1` CLI shim will not launch this way; it currently records a *failed worker* (no crash). Fix needs your actual install: resolve the shim to its node target and spawn that directly (keep `shell:false`).
+3. **Per-worker MCP registration (I1 residual):** a spawned worker has `CREWCAST_RUN` in its env, but crewcast's MCP server must also be *registered into that worker CLI's per-run config* (vendor-specific) so the worker has a `post_message` tool.
+4. **`ExitPlanMode` hook firing:** confirm a `PostToolUse`/`ExitPlanMode` hook actually fires on your Claude Code version.
+5. **copilot `--allow-all-tools` (I5):** confirm it isn't effectively permission-off (§3); workers run in their own worktree as a mitigant.
+6. **The §8 gate:** a trivial two-unit `plan.md` (one Codex, one Antigravity), approve the plan, watch both workers post progress to the mailbox mid-task.
 
 ## Open calls for the owner
 
