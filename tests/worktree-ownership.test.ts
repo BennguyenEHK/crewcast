@@ -43,3 +43,16 @@ test('ownership checks the branch changed-file names (committed + untracked) aga
     await cleanup();
   }
 });
+
+test('a non-ASCII filename is returned raw, so a compliant worker is not wrongly flagged', async () => {
+  const { root, cleanup } = await repo();
+  try {
+    const mgr = new WorktreeManager({ repoRoot: root });
+    const wt = await mgr.create('codex', 1);
+    await writeFile(join(wt.path, 'café.ts'), 'export const c = 3;\n', 'utf8');
+    assert.ok((await mgr.changedFiles(wt)).includes('café.ts'), 'non-ASCII path must come back undecorated');
+    assert.deepEqual(await mgr.ownership(wt, ['café.ts']), { ok: true, outside: [] });
+  } finally {
+    await cleanup();
+  }
+});

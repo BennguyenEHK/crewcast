@@ -38,11 +38,27 @@ test('create makes a distinct worktree + branch per worker; remove tears it down
     const list = await git(root, 'worktree', 'list', '--porcelain');
     assert.ok(list.includes(a.branch) || list.includes(a.path.replace(/\\/g, '/')));
 
-    await mgr.remove(a);
+    const res = await mgr.remove(a);
+    assert.deepEqual(res.failed, []);                                           // clean teardown reports no failures
     assert.equal(await exists(a.path), false);                                  // folder gone
     assert.ok(!(await git(root, 'branch', '--list', a.branch)).trim());         // branch gone
     assert.ok(await exists(join(root, 'README.md')));                            // main repo untouched
+    await mgr.remove(b);
   } finally {
     await cleanup();
   }
+});
+
+test('remove reports a teardown step that fails instead of swallowing it', async () => {
+  const calls: string[][] = [];
+  const run = async (args: string[]) => {
+    calls.push(args);
+    if (args.includes('remove')) throw new Error('worktree is locked (folder in use)');
+    return '';
+  };
+  const mgr = new WorktreeManager({ repoRoot: 'C:/repo', run });
+  const res = await mgr.remove({ path: 'C:/repo-wt/codex-1', branch: 'crewcast/codex-1', base: 'abc123' });
+  assert.ok(res.failed.some(f => f.includes('remove')), `expected a reported failure, got ${JSON.stringify(res.failed)}`);
+  assert.ok(calls.some(a => a.includes('branch') && a.includes('-D')), 'branch delete is still attempted');
+  assert.ok(calls.some(a => a.includes('prune')), 'prune runs to clear a stale registration');
 });

@@ -21,22 +21,34 @@ export class WorktreeManager {
     return { path, branch, base: baseRef };
   }
 
-  async remove(wt: Worktree): Promise<void> {
-    // Order per §7.7: the worktree link + folder first, then the branch. Best-effort: a step whose target is already gone is skipped.
-    await this.git(['-C', this.deps.repoRoot, 'worktree', 'remove', '--force', wt.path]).catch(() => {});
-    await this.git(['-C', this.deps.repoRoot, 'branch', '-D', wt.branch]).catch(() => {});
+  // Order per §7.7: the worktree link + folder first, then the branch. Reports (not swallows) a step that fails — on Windows a locked
+  // worktree folder fails routinely — so the caller knows cleanup was partial; then prunes any stale registration left behind.
+  async remove(wt: Worktree): Promise<{ failed: string[] }> {
+    const failed: string[] = [];
+    const step = async (args: string[], label: string) => {
+      try { await this.git(['-C', this.deps.repoRoot, ...args]); }
+      catch (e) { failed.push(`${label}: ${(e as Error).message}`); }
+    };
+    await step(['worktree', 'remove', '--force', wt.path], `worktree remove ${wt.path}`);
+    await step(['branch', '-D', wt.branch], `branch -D ${wt.branch}`);
+    await this.git(['-C', this.deps.repoRoot, 'worktree', 'prune']).catch(() => {});
+    return { failed };
   }
 
   // The file names the branch changed vs its base: committed changes ∪ working-tree changes (incl. untracked). Names, not diff (§7.13).
+  // -z gives NUL-separated, unquoted paths, so non-ASCII and spaced names come back raw (no octal escaping) and compare correctly.
   async changedFiles(wt: Worktree): Promise<string[]> {
-    const committed = await this.git(['-C', wt.path, 'diff', '--name-only', `${wt.base}...HEAD`]);
-    const status = await this.git(['-C', wt.path, 'status', '--porcelain']);
+    const committed = await this.git(['-C', wt.path, 'diff', '--name-only', '-z', `${wt.base}...HEAD`]);
+    const status = await this.git(['-C', wt.path, 'status', '--porcelain', '-z']);
     const names = new Set<string>();
-    for (const line of committed.split(/\r?\n/)) if (line.trim()) names.add(norm(line.trim()));
-    for (const line of status.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      const path = line.slice(3).trim();            // drop the 3-char status prefix (" M ", "?? ", …)
-      names.add(norm(path.includes(' -> ') ? path.split(' -> ')[1] : path)); // a rename reports its destination
+    for (const p of committed.split('\0')) if (p) names.add(norm(p));
+    const fields = status.split('\0');
+    for (let i = 0; i < fields.length; i++) {
+      const entry = fields[i];
+      if (!entry) continue;
+      const code = entry.slice(0, 2);                 // 2 status chars, then a space, then the path
+      names.add(norm(entry.slice(3)));
+      if (code.includes('R') || code.includes('C')) i++; // a rename/copy adds the original path as the next field — skip it
     }
     return [...names];
   }
@@ -52,4 +64,4 @@ export class WorktreeManager {
   }
 }
 
-const norm = (p: string): string => p.replace(/\\/g, '/').replace(/^"|"$/g, '');
+const norm = (p: string): string => p.replace(/\\/g, '/'); // with -z git already emits forward slashes; this only guards a stray backslash
