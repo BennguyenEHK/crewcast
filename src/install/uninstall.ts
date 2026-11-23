@@ -1,7 +1,8 @@
 import { InstalledManifest, type Action } from './manifest.js';
+import { mcpRemoveArgs } from './mcp-register.js';
 
 const label = (a: Action): string =>
-  a.kind === 'mcp' ? `mcp ${a.server}`
+  a.kind === 'mcp' ? `mcp ${a.server} (${a.bin ?? 'claude'})`
   : a.kind === 'skillCopy' ? a.dest
   : a.kind === 'hook' ? `hook ${a.settingsPath}`
   : a.path;
@@ -25,7 +26,7 @@ export class Uninstall {
     const kept: Action[] = [];
     for (const a of [...actions].reverse()) {
       try {
-        if (a.kind === 'mcp') await this.deps.run('claude', ['mcp', 'remove', a.server]);
+        if (a.kind === 'mcp') await this.deps.run(a.bin ?? 'claude', mcpRemoveArgs);
         else if (a.kind === 'skillCopy' || a.kind === 'dir' || a.kind === 'file') await this.deps.remove(a.kind === 'skillCopy' ? a.dest : a.path);
         else if (a.kind === 'hook') await this.deps.removeHook(a.settingsPath);
         removed.push(label(a));

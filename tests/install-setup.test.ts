@@ -41,13 +41,25 @@ test('a clean setup registers mcp, installs the skill + hook, and pre-warms both
   });
 });
 
-test('setup run twice is idempotent — no duplicate manifest entries', async () => {
+test('setup registers crewcast MCP into every installed worker CLI (not just the captain)', async () => {
+  await withHomes(async (crewHome, userHome) => {
+    const f = fakes(); // fake run returns a version for every --version, so all default engines detect as installed
+    await mk(crewHome, userHome, f).run();
+    const mcpAdds = f.calls.filter(c => c[1] === 'mcp' && c[2] === 'add').map(c => c[0]);
+    for (const bin of ['claude', 'agy', 'codex', 'copilot']) assert.ok(mcpAdds.includes(bin), `no mcp add for ${bin}: ${mcpAdds.join(',')}`);
+    const mcp = (await new InstalledManifest(crewHome).load()).filter(a => a.kind === 'mcp') as { bin?: string }[];
+    assert.deepEqual(new Set(mcp.map(a => a.bin)), new Set(['claude', 'agy', 'codex', 'copilot'])); // recorded per bin for exact reversal
+  });
+});
+
+test('setup run twice is idempotent — one mcp entry per CLI, no duplicates', async () => {
   await withHomes(async (crewHome, userHome) => {
     const f = fakes();
     await mk(crewHome, userHome, f).run();
     await mk(crewHome, userHome, f).run();
     const actions = await new InstalledManifest(crewHome).load();
-    assert.equal(actions.filter(a => a.kind === 'mcp').length, 1);
+    const mcp = actions.filter(a => a.kind === 'mcp') as { bin?: string }[];
+    assert.equal(new Set(mcp.map(a => a.bin)).size, mcp.length); // no duplicate per-CLI entries
     assert.equal(actions.filter(a => a.kind === 'skillCopy').length, 1);
     assert.equal(actions.filter(a => a.kind === 'hook').length, 1);
   });

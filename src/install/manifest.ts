@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type Action =
-  | { kind: 'mcp'; server: string }        // registered with `claude mcp add <server>`
+  | { kind: 'mcp'; server: string; bin?: string } // registered with `<bin> mcp add <server>` (bin defaults to claude for old manifests)
   | { kind: 'skillCopy'; dest: string }     // copied a skill folder to dest
   | { kind: 'dir'; path: string }           // created a dir
   | { kind: 'file'; path: string }          // wrote a file
