@@ -59,7 +59,8 @@ export class McpServer {
   // Reads one JSON message per line; writes one JSON response per line. Ends when input ends.
   async serve(input: NodeJS.ReadableStream, output: NodeJS.WritableStream): Promise<void> {
     const rl = createInterface({ input, crlfDelay: Infinity });
-    for await (const line of rl) {
+    for await (const raw of rl) {
+      const line = raw.replace(/^﻿/, ''); // a client may prepend a UTF-8 BOM; strip it so the first message still parses
       if (line.trim() === '') continue;
       let msg: unknown;
       try {
