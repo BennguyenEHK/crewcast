@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -29,6 +29,8 @@ import { parsePlan } from './plan.js';
 import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
 import { resolveLauncher } from './dispatch/launcher.js';
+import { RunWatch } from './dispatch/run-watch.js';
+import { renderWatch } from './dispatch/watch-render.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
 import { RunStatusTool } from './mcp/run-status-tool.js';
@@ -63,6 +65,11 @@ function defaultWarm(baseUrl: string): (model: string) => Promise<void> {
     } catch { /* cold model stays cold; the next real call pays the load */ }
   };
 }
+
+// Is a detached worker process still running? signal 0 probes without signalling; ESRCH means gone, anything else (incl. EPERM) means alive.
+const defaultAlive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code !== 'ESRCH'; }
+};
 
 interface HookEntry { matcher?: string; hooks: { type: string; command: string }[] }
 interface Settings { hooks?: Record<string, HookEntry[]>; [k: string]: unknown }
@@ -104,6 +111,7 @@ const USAGE = [
   '  skills',
   '  engines [--json]',
   '  plan <file> [--json]',
+  '  watch [run] [--interval <ms>]',
   '  setup',
   '  doctor',
   '  uninstall',
@@ -114,7 +122,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; hookTimeoutMs: number }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; alive: (pid: number) => boolean; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -130,6 +138,7 @@ export class Cli {
     if (argv[0] === 'eval') return argv[1] === 'draft' ? this.evalDraft(argv.slice(2)) : this.evalRun(argv.slice(1));
     if (argv[0] === 'engines') return this.engines(argv.slice(1));
     if (argv[0] === 'plan') return this.plan(argv.slice(1));
+    if (argv[0] === 'watch') return this.watch(argv.slice(1));
     if (argv[0] === 'setup') return this.setup();
     if (argv[0] === 'doctor') return this.doctor();
     if (argv[0] === 'uninstall') return this.uninstall();
@@ -197,6 +206,44 @@ export class Cli {
       this.out(`    model ${u.model}, effort ${u.effort ?? 'default'}; skills: ${u.skills.join(', ') || 'none'}; files: ${u.files.join(', ') || 'none'}`);
     }
     return 0;
+  }
+
+  // Live terminal view of a team run (read-only): redraws the status table each tick until Ctrl+C. Runs beside Claude Code.
+  private async watch(args: string[]): Promise<number> {
+    let parsed;
+    try {
+      parsed = parseArgs({ args, allowPositionals: true, options: { interval: { type: 'string', default: '1000' } } });
+    } catch {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const run = parsed.positionals[0] ?? (await this.latestRun());
+    if (!run) {
+      this.out('no runs yet — start a team task, approve its plan, then watch');
+      return 0;
+    }
+    const interval = Math.max(200, Number(parsed.values.interval) || 1000);
+    for (;;) {
+      this.out('\x1b[2J\x1b[H' + (await this.watchOnce(run))); // clear screen + home, then the frame
+      await new Promise(r => setTimeout(r, interval));
+    }
+  }
+
+  private async watchOnce(run: string): Promise<string> {
+    const crewHome = this.crewcastHome();
+    const watch = new RunWatch({ runsHome: crewHome, mailbox: new Mailbox(crewHome), alive: this.deps.alive ?? defaultAlive });
+    return renderWatch(await watch.view(run));
+  }
+
+  // The most recently started run under <crewHome>/runs, by run.json mtime. undefined if there are none.
+  private async latestRun(): Promise<string | undefined> {
+    const dir = join(this.crewcastHome(), 'runs');
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return undefined; }
+    const dated = await Promise.all(entries.filter(e => e.isDirectory()).map(async e => ({
+      name: e.name, t: await stat(join(dir, e.name, 'run.json')).then(s => s.mtimeMs, () => 0),
+    })));
+    return dated.filter(d => d.t > 0).sort((a, b) => b.t - a.t)[0]?.name;
   }
 
   private async defaultPickSkills(home: string, cwd: string, crewHome: string): Promise<(text: string) => Promise<string[]>> {
