@@ -27,6 +27,7 @@ const USAGE = [
   '  eval [--model <name>] [file]',
   '  skills',
   '  engines [--json]',
+  '  hook',
   '  mcp',
   '  --version',
 ];
@@ -49,6 +50,7 @@ export class Cli {
     if (argv[0] === 'stats') return this.stats();
     if (argv[0] === 'eval') return argv[1] === 'draft' ? this.evalDraft(argv.slice(2)) : this.evalRun(argv.slice(1));
     if (argv[0] === 'engines') return this.engines(argv.slice(1));
+    if (argv[0] === 'hook') return this.hook();
     if (argv[0] === 'mcp') return this.mcp();
     USAGE.forEach(line => this.out(line));
     return 1;
@@ -73,6 +75,43 @@ export class Cli {
       this.out(`${e.id} — ${e.installed ? `installed ${e.version ?? '?'}` : 'absent'}, model ${e.models[0]}, parallel ${e.parallelLimit}`);
     }
     return 0;
+  }
+
+  // UserPromptSubmit hook: fail-open. Emits a short decision context, or nothing, and never blocks the prompt.
+  private async hook(): Promise<number> {
+    const chunks: Buffer[] = [];
+    for await (const c of process.stdin) chunks.push(c as Buffer);
+    const out = await this.buildHookOutput(Buffer.concat(chunks).toString('utf8'));
+    if (out) this.out(out);
+    return 0;
+  }
+
+  private async buildHookOutput(payload: string): Promise<string> {
+    let prompt: string;
+    try {
+      const p = JSON.parse(payload) as { prompt?: unknown };
+      prompt = typeof p.prompt === 'string' ? p.prompt : '';
+    } catch {
+      return '';
+    }
+    if (!prompt.trim() || prompt.trim().split(/\s+/).length < 8) return '';
+    try {
+      const { home, cwd } = this.paths();
+      const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+      const client = new SystemOneClient({ baseUrl, timeoutMs: 2000 });
+      const ask = this.deps.ask ?? ((r: SystemOneRequest) => client.ask(r));
+      const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+      const git = await new GitInspector().state(cwd);
+      const index = new SkillIndex({ baseUrl, home: this.crewcastHome() });
+      const rec = await new Decider({ ask, skills, git, model: 'kev:4b-q4_K_M', shortlist: (t, s) => index.top(t, s) }).decide(prompt);
+      const picked = rec.agents[0]?.skills.join(', ') || 'none';
+      const branch = `${rec.branch.action}${rec.branch.name ? ` ${rec.branch.name}` : ''}`;
+      let block = `crewcast (shadow): mode=${rec.mode}; skills: ${picked}; branch: ${branch}.`;
+      if (rec.mode === 'team') block += ' You are the team captain: delegate, read reports, route reviews; do not write code or review diffs (crewcast skill §7.13).';
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: block } });
+    } catch {
+      return ''; // fail-open: any backend error leaves the prompt untouched
+    }
   }
 
   private async mcp(): Promise<number> {
