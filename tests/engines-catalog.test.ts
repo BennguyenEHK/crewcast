@@ -51,6 +51,16 @@ test('DEFAULT_ENGINES contains no permission-off flag', () => {
   }
 });
 
+test('detect finds a Windows .cmd shim (shell resolution)', { skip: process.platform !== 'win32' }, async () => {
+  await withHome(async dir => {
+    const cmd = join(dir, 'probe.cmd');
+    await writeFile(cmd, '@echo 9.9\r\n', 'utf8');
+    const [out] = await new EngineCatalog().detect([eng('probe', cmd)]);
+    assert.equal(out.installed, true);
+    assert.equal(out.version, '9.9');
+  });
+});
+
 test('save then load round-trips the engines', async () => {
   await withHome(async home => {
     await new EngineCatalog().save(DEFAULT_ENGINES, home);

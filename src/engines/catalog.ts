@@ -37,7 +37,9 @@ export class EngineCatalog {
   private readonly run: (bin: string, args: string[]) => Promise<string>;
 
   constructor(deps: { run?: (bin: string, args: string[]) => Promise<string> } = {}) {
-    this.run = deps.run ?? (async (bin, args) => (await execFileP(bin, args)).stdout);
+    // shell:true so Windows resolves .cmd/.ps1 CLI shims (gemini, codex) that execFile cannot CreateProcess directly.
+    // Safe here: bin and args are trusted catalog constants (never task text). Phase 2 task dispatch must not use shell:true.
+    this.run = deps.run ?? (async (bin, args) => (await execFileP(bin, args, { shell: true })).stdout);
   }
 
   // Probe each engine's version. A failure marks it absent and never aborts the others.
