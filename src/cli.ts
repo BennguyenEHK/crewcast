@@ -19,6 +19,9 @@ import { Evaluator } from './eval.js';
 import { McpServer } from './mcp/server.js';
 import { DecideTool } from './mcp/decide-tool.js';
 import { CatalogTool } from './mcp/catalog-tool.js';
+import { PostMessageTool } from './mcp/post-message-tool.js';
+import { ReadMessagesTool } from './mcp/read-messages-tool.js';
+import { Mailbox } from './mailbox.js';
 import { EngineCatalog } from './engines/catalog.js';
 import { Setup } from './install/setup.js';
 import { Doctor } from './install/doctor.js';
@@ -248,9 +251,12 @@ export class Cli {
     const git = await new GitInspector().state(cwd);
     const crewHome = this.crewcastHome();
     const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
+    const mailbox = new Mailbox(crewHome);
     const tools = [
       new DecideTool({ ask, skills, git, home: crewHome, baseUrl, defaultModel: 'kev:4b-q4_K_M' }),
       new CatalogTool({ skills }),
+      new PostMessageTool({ mailbox }),
+      new ReadMessagesTool({ mailbox }),
     ];
     return new McpServer({ tools, serverInfo: { name: 'crewcast', version } });
   }
