@@ -16,6 +16,7 @@ import { Evaluator } from './eval.js';
 import { McpServer } from './mcp/server.js';
 import { DecideTool } from './mcp/decide-tool.js';
 import { CatalogTool } from './mcp/catalog-tool.js';
+import { EngineCatalog } from './engines/catalog.js';
 
 const USAGE = [
   'usage: crewcast <command>',
@@ -25,6 +26,7 @@ const USAGE = [
   '  eval draft [--projects <dir>] [--out <file>] [--limit N] [--force]',
   '  eval [--model <name>] [file]',
   '  skills',
+  '  engines [--json]',
   '  mcp',
   '  --version',
 ];
@@ -32,7 +34,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string> }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -46,9 +48,31 @@ export class Cli {
     if (argv[0] === 'label') return this.label(argv.slice(1));
     if (argv[0] === 'stats') return this.stats();
     if (argv[0] === 'eval') return argv[1] === 'draft' ? this.evalDraft(argv.slice(2)) : this.evalRun(argv.slice(1));
+    if (argv[0] === 'engines') return this.engines(argv.slice(1));
     if (argv[0] === 'mcp') return this.mcp();
     USAGE.forEach(line => this.out(line));
     return 1;
+  }
+
+  private async engines(args: string[]): Promise<number> {
+    let json = false;
+    try {
+      json = parseArgs({ args, options: { json: { type: 'boolean', default: false } } }).values.json;
+    } catch {
+      USAGE.forEach(line => this.out(line));
+      return 1;
+    }
+    const cat = new EngineCatalog({ run: this.deps.run });
+    const engines = await cat.detect();
+    await cat.save(engines, this.crewcastHome());
+    if (json) {
+      this.out(JSON.stringify(engines));
+      return 0;
+    }
+    for (const e of engines) {
+      this.out(`${e.id} — ${e.installed ? `installed ${e.version ?? '?'}` : 'absent'}, model ${e.models[0]}, parallel ${e.parallelLimit}`);
+    }
+    return 0;
   }
 
   private async mcp(): Promise<number> {
