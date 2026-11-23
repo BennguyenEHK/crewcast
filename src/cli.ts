@@ -108,7 +108,7 @@ const USAGE = [
 export class Cli {
   constructor(
     private readonly out: (line: string) => void,
-    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; hookTimeoutMs: number }> = {},
+    private readonly deps: Partial<{ ask: (r: SystemOneRequest) => Promise<SystemOneResponse>; env: NodeJS.ProcessEnv; cwd: string; run: (bin: string, args: string[]) => Promise<string>; warm: (model: string) => Promise<void>; pickSkills: (text: string) => Promise<string[]>; dispatchPlan: (plan: string, run: string) => Promise<RunState>; hookTimeoutMs: number }> = {},
   ) {}
 
   async run(argv: string[]): Promise<number> {
@@ -259,7 +259,8 @@ export class Cli {
   private async buildHookOutput(payload: string): Promise<string> {
     let prompt: string;
     try {
-      const p = JSON.parse(payload) as { prompt?: unknown };
+      const p = JSON.parse(payload) as { prompt?: unknown; tool_name?: unknown };
+      if (p.tool_name === 'ExitPlanMode') return this.dispatchOnPlanApproval(); // §7.14: plan approved → start the crew
       prompt = typeof p.prompt === 'string' ? p.prompt : '';
     } catch {
       return '';
@@ -289,6 +290,27 @@ export class Cli {
     } catch {
       return ''; // fail-open: any backend error leaves the prompt untouched
     }
+  }
+
+  // Fired by a PostToolUse hook on ExitPlanMode (§7.14): read the project plan.md and dispatch the crew. Fail-open — a missing plan or a dispatch error just lets the approval proceed.
+  private async dispatchOnPlanApproval(): Promise<string> {
+    try {
+      const { cwd } = this.paths();
+      const dispatch = this.deps.dispatchPlan ?? (await this.realDispatchPlan());
+      const run = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      await dispatch(join(cwd, 'plan.md'), run);
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `crewcast: dispatched team run ${run} from plan.md.` } });
+    } catch {
+      return '';
+    }
+  }
+
+  private async realDispatchPlan(): Promise<(plan: string, run: string) => Promise<RunState>> {
+    const { home, cwd } = this.paths();
+    const baseUrl = new Config(this.deps.env).ollamaBaseUrl;
+    const crewHome = this.crewcastHome();
+    const skills = await new SkillCatalog().load(await SkillCatalog.defaultDirs(home, cwd));
+    return this.buildDispatch(home, cwd, crewHome, baseUrl, skills, new Mailbox(crewHome)).dispatch;
   }
 
   private async mcp(): Promise<number> {
