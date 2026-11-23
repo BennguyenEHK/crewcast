@@ -74,6 +74,24 @@ test('a changed mtime re-embeds just that skill', async () => {
   });
 });
 
+test('the embed text includes the SKILL.md body, not just name + description', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-index-body-'));
+  try {
+    const folder = join(root, 'skills', 'ui-skill');
+    await mkdir(folder, { recursive: true });
+    const path = join(folder, 'SKILL.md');
+    await writeFile(path, '---\nname: ui-skill\ndescription: short\n---\n\n# Overview\nUse this for SCROLLBAR and TERMINAL PANEL layout work.\n', 'utf8');
+    const skill: Skill = { name: 'ui-skill', description: 'short', path };
+    const { fetchFn, calls } = fakeFetch();
+    await new SkillIndex({ baseUrl: 'http://x', home: join(root, 'home'), fetchFn }).top('design a panel', [skill]);
+    const embedded = calls.flat().join('\n');
+    assert.match(embedded, /ui-skill: short/);               // still carries name + description
+    assert.match(embedded, /SCROLLBAR and TERMINAL PANEL/);  // and now the body text too
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('an embed error falls back to the keyword shortlist and never throws', async () => {
   await withSkills(async ({ home, skills }) => {
     const fetchFn = (async () => { throw new Error('ollama down'); }) as unknown as typeof fetch;
