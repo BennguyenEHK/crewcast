@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { WorktreeManager } from '../src/worktree.js';
 
 const execFileP = promisify(execFile);
-const git = (cwd: string, ...args: string[]) => execFileP('git', ['-C', cwd, ...args], { shell: true }).then(r => r.stdout);
+const git = (cwd: string, ...args: string[]) => execFileP('git', ['-C', cwd, ...args]).then(r => r.stdout);
 
 async function repo(): Promise<{ root: string; base: string; cleanup: () => Promise<void> }> {
   const parent = await mkdtemp(join(tmpdir(), 'cc-wt-'));
