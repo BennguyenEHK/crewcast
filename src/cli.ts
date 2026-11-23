@@ -27,6 +27,7 @@ import { EngineCatalog, type Engine } from './engines/catalog.js';
 import { parsePlan } from './plan.js';
 import { PlanAllocator } from './decide/allocate.js';
 import { Dispatcher, type RunState, type RunStatus } from './dispatch/dispatcher.js';
+import { resolveLauncher } from './dispatch/launcher.js';
 import { WorktreeManager } from './worktree.js';
 import { DispatchTool } from './mcp/dispatch-tool.js';
 import { RunStatusTool } from './mcp/run-status-tool.js';
@@ -365,17 +366,20 @@ export class Cli {
       worktrees: new WorktreeManager({ repoRoot: cwd }),
       mailbox,
       runsHome: crewHome,
-      spawn: (bin, args, opts) => new Promise(resolve => {
-        // Resolve on 'spawn' or 'error' so a launch failure (e.g. a Windows .cmd shim unlaunchable without a shell) is a recorded
-        // worker, never an uncaught exception that would crash the long-lived MCP server.
-        const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
-        child.on('error', e => resolve({ pid: null, error: (e as Error).message }));
-        child.on('spawn', () => {
-          child.stdin?.end(); // close stdin so agy -p does not hang on Windows
-          child.unref();
-          resolve({ pid: child.pid ?? null });
+      spawn: async (bin, args, opts) => {
+        // Resolve a Windows npm .cmd/.ps1 shim to `node <cli.js>` so shell:false can launch it (the untrusted prompt never hits a shell, §3).
+        const { cmd, prefixArgs } = await resolveLauncher(bin);
+        return new Promise(resolve => {
+          // Resolve on 'spawn' or 'error' so a launch failure is a recorded worker, never an uncaught exception that crashes the MCP server.
+          const child = spawn(cmd, [...prefixArgs, ...args], { cwd: opts.cwd, env: { ...process.env, ...opts.env }, stdio: ['pipe', 'ignore', 'ignore'], detached: true });
+          child.on('error', e => resolve({ pid: null, error: (e as Error).message }));
+          child.on('spawn', () => {
+            child.stdin?.end(); // close stdin so agy -p does not hang on Windows
+            child.unref();
+            resolve({ pid: child.pid ?? null });
+          });
         });
-      }),
+      },
       skillText,
       mcpConfig: run => ({ CREWCAST_RUN: run }),
     });
